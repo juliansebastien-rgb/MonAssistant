@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.5.1
+ * Version: 2.5.2
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.5.1';
+    const VERSION = '2.5.2';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -148,42 +148,16 @@ final class AZSA_Plugin {
     }
 
     public static function sanitize_settings($input) {
-        $defaults = self::defaults();
-        $out = array();
-
-        $out['assistant_name'] = sanitize_text_field($input['assistant_name'] ?? $defaults['assistant_name']);
-        $out['logo_url'] = esc_url_raw($input['logo_url'] ?? '');
-        if ($out['logo_url'] === '') {
-            $out['logo_url'] = self::DEFAULT_ROBOT_LOGO_URL;
+        $out = self::get_settings();
+        if (isset($input['calendar_provider'])) {
+            $provider = sanitize_key((string) $input['calendar_provider']);
+            $out['calendar_provider'] = in_array($provider, array('none', 'calendly'), true) ? $provider : 'none';
         }
-        $out['character_gif_url'] = esc_url_raw($input['character_gif_url'] ?? '');
-        $out['character_gif_base_url'] = esc_url_raw($input['character_gif_base_url'] ?? self::DEFAULT_GIF_BASE_URL);
-        $out['max_pages'] = max(10, min(300, absint($input['max_pages'] ?? $defaults['max_pages'])));
-        $out['max_depth'] = max(1, min(4, absint($input['max_depth'] ?? $defaults['max_depth'])));
-        $out['api_key'] = sanitize_text_field($input['api_key'] ?? '');
-        $out['model'] = sanitize_text_field($input['model'] ?? $defaults['model']);
-        $lang = sanitize_key($input['lang'] ?? $defaults['lang']);
-        $out['lang'] = in_array($lang, array('fr', 'en', 'es', 'de', 'it', 'pt'), true) ? $lang : 'fr';
-        $out['elevenlabs_api_key'] = sanitize_text_field($input['elevenlabs_api_key'] ?? '');
-        $out['elevenlabs_voice_male'] = sanitize_text_field($input['elevenlabs_voice_male'] ?? '');
-        $speed = (float) ($input['elevenlabs_speed'] ?? $defaults['elevenlabs_speed']);
-        if ($speed < 0.7) {
-            $speed = 0.7;
-        } elseif ($speed > 1.2) {
-            $speed = 1.2;
+        if (isset($input['calendly_url'])) {
+            $out['calendly_url'] = esc_url_raw((string) $input['calendly_url']);
         }
-        $out['elevenlabs_speed'] = (string) number_format($speed, 2, '.', '');
-        $provider = sanitize_key((string) ($input['calendar_provider'] ?? 'none'));
-        $out['calendar_provider'] = in_array($provider, array('none', 'calendly'), true) ? $provider : 'none';
-        $out['calendly_url'] = esc_url_raw((string) ($input['calendly_url'] ?? ''));
-        $repo = trim((string) ($input['github_repo'] ?? ''));
-        $repo = preg_replace('#^https?://github\\.com/#i', '', $repo);
-        $repo = trim((string) $repo, '/');
         $out['github_repo'] = self::DEFAULT_GITHUB_REPO;
-        $token_in = sanitize_text_field($input['github_token'] ?? '');
-        $out['github_token'] = $token_in !== '' ? $token_in : self::DEFAULT_GITHUB_TOKEN;
-
-        return $out;
+        return wp_parse_args($out, self::defaults());
     }
 
     public static function render_admin_page() {
@@ -191,130 +165,15 @@ final class AZSA_Plugin {
             return;
         }
 
-        if (isset($_POST['azsa_reindex']) && check_admin_referer('azsa_reindex_now', 'azsa_reindex_nonce')) {
-            self::rebuild_index();
-            echo '<div class="notice notice-success"><p>Index reconstruit.</p></div>';
-        }
-        if (isset($_POST['azsa_check_updates']) && check_admin_referer('azsa_check_updates_now', 'azsa_check_updates_nonce')) {
-            $settings = self::get_settings();
-            $repo = isset($settings['github_repo']) ? (string) $settings['github_repo'] : '';
-            delete_site_transient('update_plugins');
-            if ($repo !== '') {
-                delete_transient('azsa_gh_release_' . md5($repo));
-            }
-            if (function_exists('wp_clean_plugins_cache')) {
-                wp_clean_plugins_cache(true);
-            }
-            if (function_exists('wp_update_plugins')) {
-                wp_update_plugins();
-            }
-            self::get_latest_github_release($settings, true);
-            echo '<div class="notice notice-success"><p>Vérification des mises à jour effectuée.</p></div>';
-        }
-        if (isset($_POST['azsa_enable_auto_updates']) && check_admin_referer('azsa_toggle_auto_updates', 'azsa_toggle_auto_updates_nonce')) {
-            self::set_auto_updates_enabled(true);
-            echo '<div class="notice notice-success"><p>Mises à jour automatiques activées pour ce plugin.</p></div>';
-        }
-        if (isset($_POST['azsa_disable_auto_updates']) && check_admin_referer('azsa_toggle_auto_updates', 'azsa_toggle_auto_updates_nonce')) {
-            self::set_auto_updates_enabled(false);
-            echo '<div class="notice notice-success"><p>Mises à jour automatiques désactivées pour ce plugin.</p></div>';
-        }
-
         $settings = self::get_settings();
-        $index = get_option(self::OPTION_INDEX, array());
-        $count = isset($index['docs']) && is_array($index['docs']) ? count($index['docs']) : 0;
-        $generated = !empty($index['generated_at']) ? esc_html($index['generated_at']) : 'jamais';
-        $auto_enabled = self::is_auto_updates_enabled();
         ?>
         <div class="wrap">
             <h1>Chatbot Mon Assistant IA</h1>
-            <p>Le plugin explore le site, indexe les pages et répond aux visiteurs dans un widget contextuel.</p>
-            <p><strong>Index:</strong> <?php echo (int) $count; ?> pages | <strong>Dernière génération:</strong> <?php echo $generated; ?></p>
-            <p><strong>Mises à jour automatiques:</strong> <?php echo $auto_enabled ? 'Activées' : 'Désactivées'; ?></p>
-
-            <form method="post" style="margin: 18px 0 28px;">
-                <?php wp_nonce_field('azsa_reindex_now', 'azsa_reindex_nonce'); ?>
-                <button type="submit" name="azsa_reindex" class="button button-primary">Reconstruire l'index maintenant</button>
-            </form>
-            <form method="post" style="margin: 0 0 28px;">
-                <?php wp_nonce_field('azsa_check_updates_now', 'azsa_check_updates_nonce'); ?>
-                <button type="submit" name="azsa_check_updates" class="button">Vérifier les mises à jour maintenant</button>
-            </form>
-            <form method="post" style="margin: 0 0 28px;">
-                <?php wp_nonce_field('azsa_toggle_auto_updates', 'azsa_toggle_auto_updates_nonce'); ?>
-                <?php if ($auto_enabled): ?>
-                    <button type="submit" name="azsa_disable_auto_updates" class="button">Désactiver les mises à jour automatiques</button>
-                <?php else: ?>
-                    <button type="submit" name="azsa_enable_auto_updates" class="button button-primary">Activer les mises à jour automatiques</button>
-                <?php endif; ?>
-            </form>
+            <p>Configurez uniquement la connexion au calendrier pour les RDV.</p>
 
             <form method="post" action="options.php">
                 <?php settings_fields('azsa_settings_group'); ?>
                 <table class="form-table" role="presentation">
-                    <tr>
-                        <th scope="row"><label for="azsa_assistant_name">Nom assistant</label></th>
-                        <td><input id="azsa_assistant_name" name="<?php echo self::OPTION_SETTINGS; ?>[assistant_name]" type="text" class="regular-text" value="<?php echo esc_attr($settings['assistant_name']); ?>" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_logo_url">URL logo (bouton rond)</label></th>
-                        <td>
-                            <input id="azsa_logo_url" name="<?php echo self::OPTION_SETTINGS; ?>[logo_url]" type="url" class="regular-text" value="<?php echo esc_attr($settings['logo_url']); ?>" />
-                            <p class="description">Par défaut: logo animé tête de robot MonAssistant IA.</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_character_gif_url">URL GIF personnage animé</label></th>
-                        <td><input id="azsa_character_gif_url" name="<?php echo self::OPTION_SETTINGS; ?>[character_gif_url]" type="url" class="regular-text" value="<?php echo esc_attr($settings['character_gif_url']); ?>" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_character_gif_base_url">Base URL GIF émotions</label></th>
-                        <td>
-                            <input id="azsa_character_gif_base_url" name="<?php echo self::OPTION_SETTINGS; ?>[character_gif_base_url]" type="url" class="regular-text" value="<?php echo esc_attr($settings['character_gif_base_url']); ?>" />
-                            <p class="description">Ex: dossier contenant `15-est-tranquile.gif`, `19-parler.gif`, `7-reflechit.gif`, etc.</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_lang">Langue par défaut</label></th>
-                        <td>
-                            <select id="azsa_lang" name="<?php echo self::OPTION_SETTINGS; ?>[lang]">
-                                <option value="fr" <?php selected($settings['lang'], 'fr'); ?>>Français</option>
-                                <option value="en" <?php selected($settings['lang'], 'en'); ?>>English</option>
-                                <option value="es" <?php selected($settings['lang'], 'es'); ?>>Español</option>
-                                <option value="de" <?php selected($settings['lang'], 'de'); ?>>Deutsch</option>
-                                <option value="it" <?php selected($settings['lang'], 'it'); ?>>Italiano</option>
-                                <option value="pt" <?php selected($settings['lang'], 'pt'); ?>>Português</option>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_max_pages">Pages max crawl</label></th>
-                        <td><input id="azsa_max_pages" name="<?php echo self::OPTION_SETTINGS; ?>[max_pages]" type="number" min="10" max="300" value="<?php echo esc_attr($settings['max_pages']); ?>" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_max_depth">Profondeur max crawl</label></th>
-                        <td><input id="azsa_max_depth" name="<?php echo self::OPTION_SETTINGS; ?>[max_depth]" type="number" min="1" max="4" value="<?php echo esc_attr($settings['max_depth']); ?>" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_api_key">Anthropic API key (optionnel)</label></th>
-                        <td><input id="azsa_api_key" name="<?php echo self::OPTION_SETTINGS; ?>[api_key]" type="password" class="regular-text" value="<?php echo esc_attr($settings['api_key']); ?>" autocomplete="off" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_model">Modèle (optionnel)</label></th>
-                        <td><input id="azsa_model" name="<?php echo self::OPTION_SETTINGS; ?>[model]" type="text" class="regular-text" value="<?php echo esc_attr($settings['model']); ?>" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_eleven_key">ElevenLabs API key (voix)</label></th>
-                        <td><input id="azsa_eleven_key" name="<?php echo self::OPTION_SETTINGS; ?>[elevenlabs_api_key]" type="password" class="regular-text" value="<?php echo esc_attr($settings['elevenlabs_api_key']); ?>" autocomplete="off" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_eleven_voice_male">ElevenLabs Voice ID homme</label></th>
-                        <td><input id="azsa_eleven_voice_male" name="<?php echo self::OPTION_SETTINGS; ?>[elevenlabs_voice_male]" type="text" class="regular-text" value="<?php echo esc_attr($settings['elevenlabs_voice_male']); ?>" placeholder="ex: HQFJsVV9DOZgHpgWP5ku" /></td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_eleven_speed">Vitesse voix</label></th>
-                        <td><input id="azsa_eleven_speed" name="<?php echo self::OPTION_SETTINGS; ?>[elevenlabs_speed]" type="number" step="0.01" min="0.7" max="1.2" value="<?php echo esc_attr($settings['elevenlabs_speed']); ?>" /></td>
-                    </tr>
                     <tr>
                         <th scope="row"><label for="azsa_calendar_provider">Agenda RDV</label></th>
                         <td>
@@ -330,20 +189,6 @@ final class AZSA_Plugin {
                         <td>
                             <input id="azsa_calendly_url" name="<?php echo self::OPTION_SETTINGS; ?>[calendly_url]" type="url" class="regular-text" value="<?php echo esc_attr($settings['calendly_url'] ?? ''); ?>" placeholder="https://calendly.com/votre-compte/votre-lien" />
                             <p class="description">URL de prise de RDV publique Calendly (embed).</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_github_repo">GitHub repo (updates)</label></th>
-                        <td>
-                            <input id="azsa_github_repo" name="<?php echo self::OPTION_SETTINGS; ?>[github_repo]" type="text" class="regular-text" value="<?php echo esc_attr($settings['github_repo']); ?>" placeholder="owner/repository" />
-                            <p class="description">Ex: <code>votre-org/monassistant-ia</code>. Les mises à jour utiliseront la dernière release GitHub.</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_github_token">GitHub token (optionnel)</label></th>
-                        <td>
-                            <input id="azsa_github_token" name="<?php echo self::OPTION_SETTINGS; ?>[github_token]" type="password" class="regular-text" value="<?php echo esc_attr($settings['github_token']); ?>" autocomplete="off" />
-                            <p class="description">Utile pour repo privé ou limites API GitHub.</p>
                         </td>
                     </tr>
                 </table>
