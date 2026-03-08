@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.4.2
+ * Version: 2.4.3
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.4.2';
+    const VERSION = '2.4.3';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -30,7 +30,6 @@ final class AZSA_Plugin {
         add_action(self::CRON_HOOK, array(__CLASS__, 'rebuild_index'));
         add_filter('pre_set_site_transient_update_plugins', array(__CLASS__, 'check_for_updates'));
         add_filter('plugins_api', array(__CLASS__, 'plugin_info_popup'), 10, 3);
-        add_filter('auto_update_plugin', array(__CLASS__, 'auto_update_plugin'), 10, 2);
         add_action('upgrader_process_complete', array(__CLASS__, 'clear_update_cache'), 10, 2);
 
         register_activation_hook(__FILE__, array(__CLASS__, 'activate'));
@@ -188,6 +187,22 @@ final class AZSA_Plugin {
             self::rebuild_index();
             echo '<div class="notice notice-success"><p>Index reconstruit.</p></div>';
         }
+        if (isset($_POST['azsa_check_updates']) && check_admin_referer('azsa_check_updates_now', 'azsa_check_updates_nonce')) {
+            $settings = self::get_settings();
+            $repo = isset($settings['github_repo']) ? (string) $settings['github_repo'] : '';
+            delete_site_transient('update_plugins');
+            if ($repo !== '') {
+                delete_transient('azsa_gh_release_' . md5($repo));
+            }
+            if (function_exists('wp_clean_plugins_cache')) {
+                wp_clean_plugins_cache(true);
+            }
+            if (function_exists('wp_update_plugins')) {
+                wp_update_plugins();
+            }
+            self::get_latest_github_release($settings, true);
+            echo '<div class="notice notice-success"><p>Vérification des mises à jour effectuée.</p></div>';
+        }
 
         $settings = self::get_settings();
         $index = get_option(self::OPTION_INDEX, array());
@@ -202,6 +217,10 @@ final class AZSA_Plugin {
             <form method="post" style="margin: 18px 0 28px;">
                 <?php wp_nonce_field('azsa_reindex_now', 'azsa_reindex_nonce'); ?>
                 <button type="submit" name="azsa_reindex" class="button button-primary">Reconstruire l'index maintenant</button>
+            </form>
+            <form method="post" style="margin: 0 0 28px;">
+                <?php wp_nonce_field('azsa_check_updates_now', 'azsa_check_updates_nonce'); ?>
+                <button type="submit" name="azsa_check_updates" class="button">Vérifier les mises à jour maintenant</button>
             </form>
 
             <form method="post" action="options.php">
@@ -471,13 +490,6 @@ final class AZSA_Plugin {
                 'changelog' => nl2br(esc_html((string) $release['body'])),
             ),
         );
-    }
-
-    public static function auto_update_plugin($update, $item) {
-        if (!is_object($item) || empty($item->plugin)) {
-            return $update;
-        }
-        return ((string) $item->plugin === plugin_basename(__FILE__)) ? true : $update;
     }
 
     public static function clear_update_cache($upgrader, $hook_extra) {
