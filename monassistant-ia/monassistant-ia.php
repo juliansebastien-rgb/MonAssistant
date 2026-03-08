@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.6.1
+ * Version: 2.7.0
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.6.1';
+    const VERSION = '2.7.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -567,7 +567,10 @@ final class AZSA_Plugin {
         $hits = self::search_docs($message, $docs, 5);
         $settings = self::get_settings();
 
-        $llm = self::llm_reply($message, $hits, $settings);
+        $llm = self::private_backend_chat($message, $hits, $settings);
+        if (empty($llm['reply'])) {
+            $llm = self::llm_reply($message, $hits, $settings);
+        }
         $reply = isset($llm['reply']) ? (string) $llm['reply'] : '';
         if ($reply === '') {
             $reply = self::local_reply($message, $hits);
@@ -644,6 +647,80 @@ final class AZSA_Plugin {
             'mime' => 'audio/mpeg',
             'audio_b64' => base64_encode($audio),
         ), 200);
+    }
+
+    public static function private_backend_config() {
+        $url = '';
+        $token = '';
+        if (defined('MONASSISTANT_BACKEND_URL')) {
+            $url = trim((string) MONASSISTANT_BACKEND_URL);
+        }
+        if (defined('MONASSISTANT_BACKEND_TOKEN')) {
+            $token = trim((string) MONASSISTANT_BACKEND_TOKEN);
+        }
+        return array(
+            'url' => esc_url_raw($url),
+            'token' => sanitize_text_field($token),
+        );
+    }
+
+    public static function private_backend_chat($message, $hits, $settings) {
+        $cfg = self::private_backend_config();
+        $base = trim((string) ($cfg['url'] ?? ''));
+        if ($base === '') {
+            return array('reply' => '', 'suggestions' => array());
+        }
+        $endpoint = trailingslashit($base) . 'chat';
+        $ctx = array();
+        foreach ((array) $hits as $h) {
+            $ctx[] = array(
+                'title' => (string) ($h['title'] ?? ''),
+                'url' => (string) ($h['url'] ?? ''),
+                'content' => self::smart_trim((string) ($h['content'] ?? ''), 1400),
+            );
+        }
+
+        $headers = array(
+            'content-type' => 'application/json',
+            'accept' => 'application/json',
+        );
+        if (!empty($cfg['token'])) {
+            $headers['authorization'] = 'Bearer ' . $cfg['token'];
+        }
+
+        $payload = array(
+            'message' => (string) $message,
+            'lang' => (string) ($settings['lang'] ?? 'fr'),
+            'site_url' => home_url('/'),
+            'context' => $ctx,
+        );
+
+        $res = wp_remote_post($endpoint, array(
+            'timeout' => 20,
+            'headers' => $headers,
+            'body' => wp_json_encode($payload),
+        ));
+        if (is_wp_error($res) || (int) wp_remote_retrieve_response_code($res) >= 300) {
+            return array('reply' => '', 'suggestions' => array());
+        }
+        $body = json_decode((string) wp_remote_retrieve_body($res), true);
+        if (!is_array($body)) {
+            return array('reply' => '', 'suggestions' => array());
+        }
+        $reply = trim(wp_strip_all_tags((string) ($body['reply'] ?? '')));
+        $suggestions = array();
+        if (!empty($body['suggestions']) && is_array($body['suggestions'])) {
+            foreach ($body['suggestions'] as $s) {
+                $s = trim(wp_strip_all_tags((string) $s));
+                if ($s !== '') {
+                    $suggestions[] = $s;
+                }
+            }
+        }
+        return array(
+            'reply' => $reply,
+            'suggestions' => array_values(array_slice(array_unique($suggestions), 0, 4)),
+        );
     }
 
     public static function rest_lead(WP_REST_Request $request) {
