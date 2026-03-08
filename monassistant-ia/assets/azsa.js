@@ -67,13 +67,19 @@
     var keepListening = false;
     var currentAudio = null;
     var selectedVoice = null;
+    var userQuestionCount = 0;
     var transcript = [];
     var lead = {
       askedAfterFirstReply: false,
+      askedRdv: false,
       stage: 'none',
       wantsRecap: false,
+      wantsRdv: false,
+      firstName: '',
+      lastName: '',
       email: '',
-      phone: ''
+      phone: '',
+      intent: 'recap'
     };
 
     function setStatus(text, thinking) {
@@ -335,8 +341,12 @@
             'X-WP-Nonce': cfg.nonce || ''
           },
           body: JSON.stringify({
+            first_name: lead.firstName,
+            last_name: lead.lastName,
             email: lead.email,
             phone: lead.phone,
+            intent: lead.intent,
+            wants_rdv: !!lead.wantsRdv,
             page_url: window.location.href,
             transcript: transcript.join('\n')
           })
@@ -351,23 +361,98 @@
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || '').trim());
     }
 
+    function looksLikeYes(v) {
+      return /(^|\s)(oui|ok|d accord|volontiers|avec plaisir|oui rdv|rdv telephonique)(\s|$)/i.test(v || '');
+    }
+
+    function looksLikeNo(v) {
+      return /(^|\s)(non|pas maintenant|plus tard|no|non merci)(\s|$)/i.test(v || '');
+    }
+
+    function parseFullName(v) {
+      var txt = (v || '').trim().replace(/\s+/g, ' ');
+      if (!txt) return null;
+      var parts = txt.split(' ');
+      if (parts.length < 2) return null;
+      return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+    }
+
+    function isCommercialContext(text) {
+      var t = (text || '').toLowerCase();
+      var keys = ['prix', 'tarif', 'offre', 'devis', 'abonnement', 'accompagnement', 'plan', 'achat', 'rdv', 'telephone', 'appel'];
+      for (var i = 0; i < keys.length; i += 1) {
+        if (t.indexOf(keys[i]) !== -1) return true;
+      }
+      return false;
+    }
+
     async function handleLeadFlow(rawText) {
       var text = (rawText || '').trim();
       var normalized = text.toLowerCase();
-      if (lead.stage === 'ask_optin') {
-        if (/(^|\\s)(oui|ok|d accord|volontiers|avec plaisir)(\\s|$)/i.test(normalized)) {
-          lead.wantsRecap = true;
-          lead.stage = 'ask_email';
-          push('bot', "Parfait. Quelle est votre adresse e-mail pour recevoir le récapitulatif ?");
+      if (/^rdv téléphonique$/i.test(text) || /^rdv telephonique$/i.test(text)) {
+        lead.stage = 'ask_rdv';
+        normalized = 'oui rdv';
+      }
+
+      if (lead.stage === 'ask_rdv') {
+        if (looksLikeYes(normalized)) {
+          lead.wantsRdv = true;
+          lead.intent = 'rdv';
+          if (lead.firstName && lead.lastName && lead.email && lead.phone) {
+            lead.stage = 'saving';
+            setStatus('Organisation du RDV...', true);
+            var savedRdv = await saveLead();
+            if (savedRdv && savedRdv.ok) {
+              push('bot', "Parfait, votre demande de RDV téléphonique est enregistrée. Nous vous recontactons rapidement.");
+            } else {
+              push('bot', "Je n'ai pas pu enregistrer le RDV pour l'instant. Vous pouvez réessayer dans un instant.");
+            }
+            lead.stage = 'done';
+            setStatus('Prêt', false);
+            return true;
+          }
+          lead.stage = 'ask_name';
+          push('bot', "Avec plaisir. Pour organiser l'appel, pouvez-vous me donner votre prénom et nom ?");
           renderChips([]);
           return true;
         }
-        if (/(^|\\s)(non|pas maintenant|plus tard|no)(\\s|$)/i.test(normalized)) {
+        if (looksLikeNo(normalized)) {
+          lead.stage = 'done';
+          push('bot', "Très bien, on continue ici. Je reste disponible pour vos questions.");
+          return true;
+        }
+        push('bot', "Souhaitez-vous être rappelé pour un RDV téléphonique ? Répondez Oui ou Non.");
+        return true;
+      }
+
+      if (lead.stage === 'ask_optin') {
+        if (looksLikeYes(normalized)) {
+          lead.wantsRecap = true;
+          lead.intent = 'recap';
+          lead.stage = 'ask_name';
+          push('bot', "Super. Pour personnaliser le récapitulatif, puis-je avoir votre prénom et nom ?");
+          renderChips([]);
+          return true;
+        }
+        if (looksLikeNo(normalized)) {
           lead.stage = 'done';
           push('bot', "Très bien. On continue sans fiche contact. Posez votre prochaine question quand vous voulez.");
           return true;
         }
         push('bot', "Souhaitez-vous recevoir un récapitulatif par e-mail ? Répondez par Oui ou Non.");
+        return true;
+      }
+
+      if (lead.stage === 'ask_name') {
+        var parsed = parseFullName(text);
+        if (!parsed) {
+          push('bot', "Merci. Pouvez-vous indiquer prénom et nom (exemple: Jean Dupont) ?");
+          return true;
+        }
+        lead.firstName = parsed.firstName;
+        lead.lastName = parsed.lastName;
+        lead.stage = 'ask_email';
+        push('bot', "Merci " + lead.firstName + ". Quelle est votre adresse e-mail ?");
         return true;
       }
 
@@ -392,7 +477,11 @@
         setStatus('Création de votre fiche...', true);
         var saved = await saveLead();
         if (saved && saved.ok) {
-          push('bot', "C'est enregistré. Votre fiche est créée et le récapitulatif a été envoyé par e-mail.");
+          if (lead.wantsRdv) {
+            push('bot', "C'est enregistré. Votre demande de RDV est bien prise en compte.");
+          } else {
+            push('bot', "C'est enregistré. Votre fiche est créée et le récapitulatif a été envoyé par e-mail.");
+          }
         } else {
           push('bot', "Je n'ai pas pu finaliser l'envoi du récapitulatif pour le moment, mais vous pouvez continuer la conversation.");
         }
@@ -422,6 +511,7 @@
           setStatus('Prêt', false);
           return;
         }
+        userQuestionCount += 1;
 
         var data = await ask(text);
         var reply = data.reply || 'Je n\'ai pas pu répondre pour le moment.';
@@ -446,8 +536,14 @@
         if (!lead.askedAfterFirstReply) {
           lead.askedAfterFirstReply = true;
           lead.stage = 'ask_optin';
-          push('bot', "Souhaitez-vous que je crée une fiche et vous envoie un récapitulatif par e-mail ? J'aurai juste besoin de votre e-mail et téléphone.");
+          push('bot', "Si vous le souhaitez, je peux vous envoyer un récapitulatif personnalisé. J'aurai simplement besoin de vos coordonnées.");
           renderChips(['Oui', 'Non merci']);
+        }
+        if (!lead.askedRdv && userQuestionCount >= 3 && isCommercialContext(text + ' ' + reply)) {
+          lead.askedRdv = true;
+          lead.stage = 'ask_rdv';
+          push('bot', "Souhaitez-vous un RDV téléphonique avec notre équipe pour aller plus loin ?");
+          renderChips(['RDV téléphonique', 'Non merci']);
         }
 
         setMood('success');
@@ -480,6 +576,7 @@
     push('bot', welcome);
     renderChips([
       'Quels services propose ce site ?',
+      'RDV téléphonique',
       'Comment vous contacter ?',
       'Pouvez-vous résumer la proposition de valeur ?'
     ]);

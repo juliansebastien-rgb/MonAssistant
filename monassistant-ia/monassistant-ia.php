@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.4.0
+ * Version: 2.4.1
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.4.0';
+    const VERSION = '2.4.1';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -587,10 +587,14 @@ final class AZSA_Plugin {
     }
 
     public static function rest_lead(WP_REST_Request $request) {
+        $first_name = sanitize_text_field((string) $request->get_param('first_name'));
+        $last_name = sanitize_text_field((string) $request->get_param('last_name'));
         $email = sanitize_email((string) $request->get_param('email'));
         $phone = sanitize_text_field((string) $request->get_param('phone'));
         $transcript = (string) $request->get_param('transcript');
         $page_url = esc_url_raw((string) $request->get_param('page_url'));
+        $intent = sanitize_text_field((string) $request->get_param('intent'));
+        $wants_rdv = (bool) $request->get_param('wants_rdv');
 
         if ($email === '' || !is_email($email)) {
             return new WP_REST_Response(array('ok' => false, 'message' => 'Email invalide.'), 400);
@@ -603,8 +607,12 @@ final class AZSA_Plugin {
         $lead = array(
             'ref' => $ref,
             'created_at' => gmdate('c'),
+            'first_name' => $first_name,
+            'last_name' => $last_name,
             'email' => $email,
             'phone' => $phone,
+            'intent' => $intent,
+            'wants_rdv' => $wants_rdv ? 1 : 0,
             'page_url' => $page_url,
             'transcript' => $transcript,
         );
@@ -623,8 +631,11 @@ final class AZSA_Plugin {
         $body = "Bonjour,\n\n"
             . "Merci pour votre échange avec notre assistant.\n"
             . "Référence: {$ref}\n\n"
+            . "Prénom: " . ($first_name !== '' ? $first_name : 'Non renseigné') . "\n"
+            . "Nom: " . ($last_name !== '' ? $last_name : 'Non renseigné') . "\n"
             . "Email: {$email}\n"
             . "Téléphone: " . ($phone !== '' ? $phone : 'Non renseigné') . "\n"
+            . "Demande: " . ($wants_rdv ? 'Souhaite un RDV téléphonique' : 'Récapitulatif') . "\n"
             . "Page: " . ($page_url !== '' ? $page_url : 'N/A') . "\n\n"
             . "Récapitulatif de l'échange:\n"
             . ($transcript !== '' ? $transcript : "Aucun message enregistré.") . "\n\n"
