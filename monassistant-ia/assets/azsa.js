@@ -16,7 +16,7 @@
     var cfg = window.AZSA_CONFIG;
 
     var root = createEl('div', { id: 'azsa-root' });
-    var panel = createEl('section', { id: 'azsa-panel', 'aria-label': 'Assistant MonAssistant IA' });
+    var panel = createEl('section', { id: 'azsa-panel', 'aria-label': 'Assistant Chatbot Mon Assistant IA' });
     var toggle = createEl('button', { id: 'azsa-toggle', type: 'button', 'aria-label': 'Ouvrir l\'assistant' });
 
     if (cfg.logoUrl) {

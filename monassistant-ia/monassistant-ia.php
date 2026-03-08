@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: MonAssistant IA
+ * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.3.6
+ * Version: 2.3.8
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.3.6';
+    const VERSION = '2.3.8';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
     const CRON_HOOK = 'azsa_rebuild_index_cron';
@@ -29,6 +29,8 @@ final class AZSA_Plugin {
         add_action(self::CRON_HOOK, array(__CLASS__, 'rebuild_index'));
         add_filter('pre_set_site_transient_update_plugins', array(__CLASS__, 'check_for_updates'));
         add_filter('plugins_api', array(__CLASS__, 'plugin_info_popup'), 10, 3);
+        add_filter('auto_update_plugin', array(__CLASS__, 'auto_update_plugin'), 10, 2);
+        add_action('upgrader_process_complete', array(__CLASS__, 'clear_update_cache'), 10, 2);
 
         register_activation_hook(__FILE__, array(__CLASS__, 'activate'));
         register_deactivation_hook(__FILE__, array(__CLASS__, 'deactivate'));
@@ -36,7 +38,7 @@ final class AZSA_Plugin {
 
     public static function defaults() {
         return array(
-            'assistant_name' => 'MonAssistant IA',
+            'assistant_name' => 'Chatbot Mon Assistant IA',
             'logo_url' => self::DEFAULT_ROBOT_LOGO_URL,
             'character_gif_url' => '',
             'character_gif_base_url' => self::DEFAULT_GIF_BASE_URL,
@@ -55,7 +57,10 @@ final class AZSA_Plugin {
 
     public static function get_settings() {
         $settings = get_option(self::OPTION_SETTINGS, array());
-        return wp_parse_args(is_array($settings) ? $settings : array(), self::defaults());
+        $settings = wp_parse_args(is_array($settings) ? $settings : array(), self::defaults());
+        // Zero-config updates: always use the official repo embedded in plugin code.
+        $settings['github_repo'] = self::DEFAULT_GITHUB_REPO;
+        return $settings;
     }
 
     public static function activate() {
@@ -121,8 +126,8 @@ final class AZSA_Plugin {
 
     public static function admin_menu() {
         add_options_page(
-            'MonAssistant IA',
-            'MonAssistant IA',
+            'Chatbot Mon Assistant IA',
+            'Chatbot Mon Assistant IA',
             'manage_options',
             'azertaf-assistant',
             array(__CLASS__, 'render_admin_page')
@@ -162,7 +167,7 @@ final class AZSA_Plugin {
         $repo = trim((string) ($input['github_repo'] ?? ''));
         $repo = preg_replace('#^https?://github\\.com/#i', '', $repo);
         $repo = trim((string) $repo, '/');
-        $out['github_repo'] = sanitize_text_field($repo !== '' ? $repo : self::DEFAULT_GITHUB_REPO);
+        $out['github_repo'] = self::DEFAULT_GITHUB_REPO;
         $token_in = sanitize_text_field($input['github_token'] ?? '');
         $out['github_token'] = $token_in !== '' ? $token_in : self::DEFAULT_GITHUB_TOKEN;
 
@@ -185,7 +190,7 @@ final class AZSA_Plugin {
         $generated = !empty($index['generated_at']) ? esc_html($index['generated_at']) : 'jamais';
         ?>
         <div class="wrap">
-            <h1>MonAssistant IA</h1>
+            <h1>Chatbot Mon Assistant IA</h1>
             <p>Le plugin explore le site, indexe les pages et répond aux visiteurs dans un widget contextuel.</p>
             <p><strong>Index:</strong> <?php echo (int) $count; ?> pages | <strong>Dernière génération:</strong> <?php echo $generated; ?></p>
 
@@ -445,7 +450,7 @@ final class AZSA_Plugin {
         }
 
         return (object) array(
-            'name' => 'MonAssistant IA',
+            'name' => 'Chatbot Mon Assistant IA',
             'slug' => $slug,
             'version' => $release['version'],
             'author' => '<a href=\"https://github.com/' . esc_attr((string) $settings['github_repo']) . '\">GitHub</a>',
@@ -456,6 +461,25 @@ final class AZSA_Plugin {
                 'changelog' => nl2br(esc_html((string) $release['body'])),
             ),
         );
+    }
+
+    public static function auto_update_plugin($update, $item) {
+        if (!is_object($item) || empty($item->plugin)) {
+            return $update;
+        }
+        return ((string) $item->plugin === plugin_basename(__FILE__)) ? true : $update;
+    }
+
+    public static function clear_update_cache($upgrader, $hook_extra) {
+        if (!is_array($hook_extra) || empty($hook_extra['type']) || $hook_extra['type'] !== 'plugin') {
+            return;
+        }
+        delete_site_transient('update_plugins');
+        $settings = self::get_settings();
+        $repo = isset($settings['github_repo']) ? (string) $settings['github_repo'] : '';
+        if ($repo !== '') {
+            delete_transient('azsa_gh_release_' . md5($repo));
+        }
     }
 
     public static function rest_chat(WP_REST_Request $request) {
