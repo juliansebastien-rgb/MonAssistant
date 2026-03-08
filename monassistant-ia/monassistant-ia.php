@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.8.6
+ * Version: 2.8.7
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.8.6';
+    const VERSION = '2.8.7';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -510,7 +510,7 @@ final class AZSA_Plugin {
         echo '</tr></thead><tbody>';
         foreach ($rows as $lead) {
             $ref = esc_html((string) ($lead['ref'] ?? ''));
-            $date = esc_html((string) ($lead['created_at'] ?? ''));
+            $date = esc_html(self::format_date_short((string) ($lead['created_at'] ?? '')));
             $first = esc_html((string) ($lead['first_name'] ?? ''));
             $last = esc_html((string) ($lead['last_name'] ?? ''));
             $email = esc_html((string) ($lead['email'] ?? ''));
@@ -591,6 +591,18 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
   });
 });
 </script>";
+    }
+
+    public static function format_date_short($value) {
+        $raw = (string) $value;
+        if ($raw === '') {
+            return '';
+        }
+        $ts = strtotime($raw);
+        if (!$ts) {
+            return $raw;
+        }
+        return gmdate('d/m/y', $ts);
     }
 
     public static function render_prospects_page() {

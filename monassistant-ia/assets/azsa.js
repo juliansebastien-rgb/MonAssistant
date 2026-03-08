@@ -531,6 +531,16 @@
       return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
     }
 
+    function formatDateShort(v) {
+      if (!v) return '';
+      var d = new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      var dd = String(d.getDate()).padStart(2, '0');
+      var mm = String(d.getMonth() + 1).padStart(2, '0');
+      var yy = String(d.getFullYear()).slice(-2);
+      return dd + '/' + mm + '/' + yy;
+    }
+
     function isCommercialContext(text) {
       var t = (text || '').toLowerCase();
       var keys = ['prix', 'tarif', 'offre', 'devis', 'abonnement', 'accompagnement', 'plan', 'achat', 'rdv', 'telephone', 'appel'];
@@ -556,6 +566,7 @@
           push('bot', "Je n'ai pas pu enregistrer votre téléphone pour le moment. Vous pouvez réessayer.");
         }
         lead.stage = 'done';
+        renderChips([]);
         setStatus('Prêt', false);
         return true;
       }
@@ -723,7 +734,7 @@
         if (info.email) lead.email = info.email;
         if (info.phone) lead.phone = info.phone;
         var rdvText = "Parfait, votre RDV est confirmé";
-        if (info.event_start) rdvText += " le " + info.event_start;
+        if (info.event_start) rdvText += " le " + formatDateShort(info.event_start);
         rdvText += ".";
         push('bot', rdvText);
         if (lead.firstName || lead.lastName || lead.email) {
@@ -742,6 +753,7 @@
           push('bot', "Je n'ai pas pu enregistrer la fiche pour le moment.");
         }
         lead.stage = 'done';
+        renderChips([]);
       } else {
         lead.stage = 'ask_phone_after_booking';
         push('bot', "Pouvez-vous ajouter votre téléphone pour finaliser votre fiche ? (ou tapez \"Passer\")");
