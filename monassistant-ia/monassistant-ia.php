@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.4.4
+ * Version: 2.4.5
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.4.4';
+    const VERSION = '2.4.5';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -685,27 +685,131 @@ final class AZSA_Plugin {
         }
         update_option(self::OPTION_LEADS, $leads, false);
 
-        $subject = 'Votre récapitulatif - Chatbot Mon Assistant IA';
-        $body = "Bonjour,\n\n"
-            . "Merci pour votre échange avec notre assistant.\n"
-            . "Référence: {$ref}\n\n"
-            . "Prénom: " . ($first_name !== '' ? $first_name : 'Non renseigné') . "\n"
-            . "Nom: " . ($last_name !== '' ? $last_name : 'Non renseigné') . "\n"
-            . "Email: {$email}\n"
-            . "Téléphone: " . ($phone !== '' ? $phone : 'Non renseigné') . "\n"
-            . "Demande: " . ($wants_rdv ? 'Souhaite un RDV téléphonique' : 'Récapitulatif') . "\n"
-            . "Page: " . ($page_url !== '' ? $page_url : 'N/A') . "\n\n"
-            . "Récapitulatif de l'échange:\n"
-            . ($transcript !== '' ? $transcript : "Aucun message enregistré.") . "\n\n"
-            . "Nous revenons vers vous si nécessaire.\n";
+        $settings = self::get_settings();
+        $logo_url = trim((string) ($settings['logo_url'] ?? ''));
+        if ($logo_url === '') {
+            $logo_url = self::DEFAULT_ROBOT_LOGO_URL;
+        }
 
-        wp_mail($email, $subject, $body);
+        $subject = 'Votre récapitulatif - Chatbot Mon Assistant IA';
+        $customer_html = self::build_lead_email_html(array(
+            'title' => 'Merci pour votre échange',
+            'subtitle' => 'Votre demande a bien été enregistrée.',
+            'ref' => $ref,
+            'first_name' => $first_name,
+            'last_name' => $last_name,
+            'email' => $email,
+            'phone' => $phone,
+            'demand' => ($wants_rdv ? 'Souhaite un RDV téléphonique' : 'Récapitulatif'),
+            'page_url' => $page_url,
+            'transcript' => $transcript,
+            'logo_url' => $logo_url,
+        ));
+        $customer_text = self::build_lead_email_text(array(
+            'ref' => $ref,
+            'first_name' => $first_name,
+            'last_name' => $last_name,
+            'email' => $email,
+            'phone' => $phone,
+            'demand' => ($wants_rdv ? 'Souhaite un RDV téléphonique' : 'Récapitulatif'),
+            'page_url' => $page_url,
+            'transcript' => $transcript,
+        ));
+        self::send_html_mail($email, $subject, $customer_html, $customer_text);
+
         $admin_email = get_option('admin_email');
         if (is_email($admin_email)) {
-            wp_mail($admin_email, '[Lead] ' . $ref . ' - ' . $email, $body);
+            $admin_html = self::build_lead_email_html(array(
+                'title' => 'Nouveau lead reçu',
+                'subtitle' => 'Un visiteur a demandé un suivi.',
+                'ref' => $ref,
+                'first_name' => $first_name,
+                'last_name' => $last_name,
+                'email' => $email,
+                'phone' => $phone,
+                'demand' => ($wants_rdv ? 'Souhaite un RDV téléphonique' : 'Récapitulatif'),
+                'page_url' => $page_url,
+                'transcript' => $transcript,
+                'logo_url' => $logo_url,
+            ));
+            self::send_html_mail($admin_email, '[Lead] ' . $ref . ' - ' . $email, $admin_html, $customer_text);
         }
 
         return new WP_REST_Response(array('ok' => true, 'ref' => $ref), 200);
+    }
+
+    public static function send_html_mail($to, $subject, $html, $text_fallback = '') {
+        $headers = array('Content-Type: text/html; charset=UTF-8');
+        $ok = wp_mail($to, $subject, $html, $headers);
+        if (!$ok && $text_fallback !== '') {
+            wp_mail($to, $subject, $text_fallback);
+        }
+        return $ok;
+    }
+
+    public static function build_lead_email_text($data) {
+        $lines = array(
+            'Bonjour,',
+            '',
+            'Référence: ' . (string) ($data['ref'] ?? ''),
+            'Prénom: ' . ((string) ($data['first_name'] ?? '') !== '' ? (string) $data['first_name'] : 'Non renseigné'),
+            'Nom: ' . ((string) ($data['last_name'] ?? '') !== '' ? (string) $data['last_name'] : 'Non renseigné'),
+            'Email: ' . (string) ($data['email'] ?? ''),
+            'Téléphone: ' . ((string) ($data['phone'] ?? '') !== '' ? (string) $data['phone'] : 'Non renseigné'),
+            'Demande: ' . (string) ($data['demand'] ?? ''),
+            'Page: ' . ((string) ($data['page_url'] ?? '') !== '' ? (string) $data['page_url'] : 'N/A'),
+            '',
+            'Récapitulatif de l’échange:',
+            (string) ($data['transcript'] ?? 'Aucun message enregistré.'),
+            '',
+            'Chatbot Mon Assistant IA',
+        );
+        return implode("\n", $lines);
+    }
+
+    public static function build_lead_email_html($data) {
+        $logo = esc_url((string) ($data['logo_url'] ?? ''));
+        $title = esc_html((string) ($data['title'] ?? 'Récapitulatif'));
+        $subtitle = esc_html((string) ($data['subtitle'] ?? ''));
+        $ref = esc_html((string) ($data['ref'] ?? ''));
+        $first = esc_html((string) ($data['first_name'] ?? ''));
+        $last = esc_html((string) ($data['last_name'] ?? ''));
+        $email = esc_html((string) ($data['email'] ?? ''));
+        $phone = esc_html((string) ($data['phone'] ?? ''));
+        $demand = esc_html((string) ($data['demand'] ?? ''));
+        $page = esc_url((string) ($data['page_url'] ?? ''));
+        $transcript = nl2br(esc_html((string) ($data['transcript'] ?? 'Aucun message enregistré.')));
+
+        $first_display = $first !== '' ? $first : 'Non renseigné';
+        $last_display = $last !== '' ? $last : 'Non renseigné';
+        $phone_display = $phone !== '' ? $phone : 'Non renseigné';
+        $page_display = $page !== '' ? '<a href="' . $page . '">' . $page . '</a>' : 'N/A';
+        $logo_block = $logo !== '' ? '<img src="' . $logo . '" alt="Logo" style="max-height:56px; width:auto; display:block; margin:0 auto 14px;" />' : '';
+
+        return '<!doctype html><html><body style="margin:0;padding:0;background:#f3f6fb;font-family:Raleway,Segoe UI,Arial,sans-serif;color:#123d64;">'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 12px;">'
+            . '<tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:660px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid rgba(18,61,100,.12);">'
+            . '<tr><td style="padding:22px 24px;background:linear-gradient(135deg,#123d64 0%,#1c6ea4 100%);color:#fff;text-align:center;">'
+            . $logo_block
+            . '<div style="font-size:22px;font-weight:700;line-height:1.2;">' . $title . '</div>'
+            . '<div style="margin-top:6px;font-size:14px;opacity:.95;">' . $subtitle . '</div>'
+            . '</td></tr>'
+            . '<tr><td style="padding:20px 24px;">'
+            . '<div style="font-size:13px;margin-bottom:14px;"><strong>Référence:</strong> ' . $ref . '</div>'
+            . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px;border-collapse:collapse;">'
+            . '<tr><td style="padding:6px 0;"><strong>Prénom</strong></td><td style="padding:6px 0;">' . $first_display . '</td></tr>'
+            . '<tr><td style="padding:6px 0;"><strong>Nom</strong></td><td style="padding:6px 0;">' . $last_display . '</td></tr>'
+            . '<tr><td style="padding:6px 0;"><strong>Email</strong></td><td style="padding:6px 0;">' . $email . '</td></tr>'
+            . '<tr><td style="padding:6px 0;"><strong>Téléphone</strong></td><td style="padding:6px 0;">' . $phone_display . '</td></tr>'
+            . '<tr><td style="padding:6px 0;"><strong>Demande</strong></td><td style="padding:6px 0;">' . $demand . '</td></tr>'
+            . '<tr><td style="padding:6px 0;"><strong>Page</strong></td><td style="padding:6px 0;">' . $page_display . '</td></tr>'
+            . '</table>'
+            . '<div style="margin-top:18px;padding:14px;border-radius:10px;background:#f5f9ff;border:1px solid rgba(18,61,100,.14);">'
+            . '<div style="font-size:13px;font-weight:700;margin-bottom:8px;">Récapitulatif de l’échange</div>'
+            . '<div style="font-size:13px;line-height:1.5;color:#234f77;">' . $transcript . '</div>'
+            . '</div>'
+            . '<div style="margin-top:16px;font-size:12px;color:#5b7390;">Cet e-mail a été généré automatiquement par Chatbot Mon Assistant IA.</div>'
+            . '</td></tr></table></td></tr></table></body></html>';
     }
 
     public static function llm_reply($message, $hits, $settings) {
