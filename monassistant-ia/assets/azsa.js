@@ -363,11 +363,16 @@
       nudgePausedUntil = Date.now() + 90000;
     });
     window.addEventListener('message', function (e) {
-      if (!e || !e.data) return;
+      if (!e || typeof e.data === 'undefined' || e.data === null) return;
       var data = e.data;
-      var evt = data.event || data.event_name || '';
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (err) { return; }
+      }
+      if (!data || typeof data !== 'object') return;
+      var evt = data.event || data.event_name || ((data.data && data.data.event) ? data.data.event : '');
       if (evt === 'calendly.event_scheduled') {
-        onCalendlyScheduled(data.payload || {});
+        var payload = data.payload || (data.data && data.data.payload) || {};
+        onCalendlyScheduled(payload);
       }
     });
 
@@ -565,6 +570,7 @@
 
       if (lead.stage === 'await_booking') {
         if (/^j ai reserve$/i.test(normalized) || /^j'ai reserve$/i.test(normalized) || /^jai reserve$/i.test(normalized)) {
+          closeBooking();
           lead.stage = 'ask_phone_after_booking';
           push('bot', "Super. Souhaitez-vous laisser un numéro de téléphone pour faciliter le rappel ? (ou tapez \"Passer\")");
           renderChips(['Passer']);
