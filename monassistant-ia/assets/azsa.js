@@ -52,11 +52,19 @@
     form.appendChild(input);
     form.appendChild(send);
 
-    panel.appendChild(head);
-    panel.appendChild(thread);
-    panel.appendChild(chips);
-    panel.appendChild(status);
-    panel.appendChild(form);
+    var bookingPane = createEl('aside', { class: 'azsa-booking', id: 'azsa-booking' });
+    var bookingFrame = createEl('iframe', { id: 'azsa-booking-frame', title: 'Prise de RDV', loading: 'lazy', referrerpolicy: 'strict-origin-when-cross-origin' });
+    bookingPane.appendChild(bookingFrame);
+    var main = createEl('div', { class: 'azsa-main' });
+    main.appendChild(head);
+    main.appendChild(thread);
+    main.appendChild(chips);
+    main.appendChild(status);
+    main.appendChild(form);
+    var layout = createEl('div', { class: 'azsa-layout' });
+    layout.appendChild(bookingPane);
+    layout.appendChild(main);
+    panel.appendChild(layout);
 
     root.appendChild(panel);
     root.appendChild(nudge);
@@ -74,6 +82,7 @@
     var nudgeTimer = null;
     var nudgeHideTimer = null;
     var nudgePausedUntil = 0;
+    var bookingOpen = false;
     var userQuestionCount = 0;
     var transcript = [];
     var lead = {
@@ -129,6 +138,28 @@
     function closePanel() {
       panel.classList.remove('azsa-open');
       opened = false;
+      closeBooking();
+    }
+
+    function getCalendlyUrl() {
+      if ((cfg.calendarProvider || 'none') !== 'calendly') return '';
+      return (cfg.calendlyUrl || '').trim();
+    }
+
+    function openBooking() {
+      var url = getCalendlyUrl();
+      if (!url) return false;
+      if (!bookingFrame.getAttribute('src')) {
+        bookingFrame.setAttribute('src', url);
+      }
+      panel.classList.add('azsa-with-booking');
+      bookingOpen = true;
+      return true;
+    }
+
+    function closeBooking() {
+      panel.classList.remove('azsa-with-booking');
+      bookingOpen = false;
     }
 
     function hideNudge() {
@@ -429,6 +460,11 @@
     async function handleLeadFlow(rawText) {
       var text = (rawText || '').trim();
       var normalized = text.toLowerCase();
+      if (/^fermer calendrier$/i.test(text)) {
+        closeBooking();
+        push('bot', "Calendrier fermé. On continue dans le chat.");
+        return true;
+      }
       if (/^rdv téléphonique$/i.test(text) || /^rdv telephonique$/i.test(text)) {
         lead.stage = 'ask_rdv';
         normalized = 'oui rdv';
@@ -438,6 +474,13 @@
         if (looksLikeYes(normalized)) {
           lead.wantsRdv = true;
           lead.intent = 'rdv';
+          if (openBooking()) {
+            openPanel();
+            push('bot', "Parfait. Le calendrier s'affiche à gauche. Choisissez un créneau puis je finalise votre fiche.");
+            renderChips(['J ai reserve', 'Fermer calendrier']);
+            lead.stage = 'ask_name';
+            return true;
+          }
           if (lead.firstName && lead.lastName && lead.email && lead.phone) {
             lead.stage = 'saving';
             setStatus('Organisation du RDV...', true);
@@ -458,6 +501,7 @@
         }
         if (looksLikeNo(normalized)) {
           lead.stage = 'done';
+          closeBooking();
           push('bot', "Très bien, on continue ici. Je reste disponible pour vos questions.");
           return true;
         }
@@ -484,6 +528,10 @@
       }
 
       if (lead.stage === 'ask_name') {
+        if (/^j ai reserve$/i.test(normalized) || /^j'ai reserve$/i.test(normalized) || /^jai reserve$/i.test(normalized)) {
+          push('bot', "Parfait. Pour confirmer le RDV, pouvez-vous me donner votre prénom et nom ?");
+          return true;
+        }
         var parsed = parseFullName(text);
         if (!parsed) {
           push('bot', "Merci. Pouvez-vous indiquer prénom et nom (exemple: Jean Dupont) ?");
@@ -526,6 +574,7 @@
           push('bot', "Je n'ai pas pu finaliser l'envoi du récapitulatif pour le moment, mais vous pouvez continuer la conversation.");
         }
         lead.stage = 'done';
+        closeBooking();
         setStatus('Prêt', false);
         return true;
       }

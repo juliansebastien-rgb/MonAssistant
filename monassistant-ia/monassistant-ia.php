@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.4.5
+ * Version: 2.5.0
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.4.5';
+    const VERSION = '2.5.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -51,6 +51,8 @@ final class AZSA_Plugin {
             'elevenlabs_api_key' => '',
             'elevenlabs_voice_male' => 'HQFJsVV9DOZgHpgWP5ku',
             'elevenlabs_speed' => '1.00',
+            'calendar_provider' => 'none',
+            'calendly_url' => '',
             'github_repo' => self::DEFAULT_GITHUB_REPO,
             'github_token' => self::DEFAULT_GITHUB_TOKEN,
         );
@@ -120,6 +122,8 @@ final class AZSA_Plugin {
             'restUrl' => esc_url_raw(rest_url('azsa/v1/chat')),
             'leadUrl' => esc_url_raw(rest_url('azsa/v1/lead')),
             'ttsUrl' => esc_url_raw(rest_url('azsa/v1/tts')),
+            'calendarProvider' => (string) ($settings['calendar_provider'] ?? 'none'),
+            'calendlyUrl' => esc_url_raw((string) ($settings['calendly_url'] ?? '')),
             'nonce' => wp_create_nonce('wp_rest'),
             'hasIndex' => $has_index,
             'lang' => (string) $settings['lang'],
@@ -169,6 +173,9 @@ final class AZSA_Plugin {
             $speed = 1.2;
         }
         $out['elevenlabs_speed'] = (string) number_format($speed, 2, '.', '');
+        $provider = sanitize_key((string) ($input['calendar_provider'] ?? 'none'));
+        $out['calendar_provider'] = in_array($provider, array('none', 'calendly'), true) ? $provider : 'none';
+        $out['calendly_url'] = esc_url_raw((string) ($input['calendly_url'] ?? ''));
         $repo = trim((string) ($input['github_repo'] ?? ''));
         $repo = preg_replace('#^https?://github\\.com/#i', '', $repo);
         $repo = trim((string) $repo, '/');
@@ -307,6 +314,23 @@ final class AZSA_Plugin {
                     <tr>
                         <th scope="row"><label for="azsa_eleven_speed">Vitesse voix</label></th>
                         <td><input id="azsa_eleven_speed" name="<?php echo self::OPTION_SETTINGS; ?>[elevenlabs_speed]" type="number" step="0.01" min="0.7" max="1.2" value="<?php echo esc_attr($settings['elevenlabs_speed']); ?>" /></td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="azsa_calendar_provider">Agenda RDV</label></th>
+                        <td>
+                            <select id="azsa_calendar_provider" name="<?php echo self::OPTION_SETTINGS; ?>[calendar_provider]">
+                                <option value="none" <?php selected($settings['calendar_provider'] ?? 'none', 'none'); ?>>Aucun</option>
+                                <option value="calendly" <?php selected($settings['calendar_provider'] ?? 'none', 'calendly'); ?>>Calendly</option>
+                            </select>
+                            <p class="description">Calendly affichera un calendrier de disponibilités dans le chat lors d'une demande de RDV.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="azsa_calendly_url">URL Calendly</label></th>
+                        <td>
+                            <input id="azsa_calendly_url" name="<?php echo self::OPTION_SETTINGS; ?>[calendly_url]" type="url" class="regular-text" value="<?php echo esc_attr($settings['calendly_url'] ?? ''); ?>" placeholder="https://calendly.com/votre-compte/votre-lien" />
+                            <p class="description">URL de prise de RDV publique Calendly (embed).</p>
+                        </td>
                     </tr>
                     <tr>
                         <th scope="row"><label for="azsa_github_repo">GitHub repo (updates)</label></th>
