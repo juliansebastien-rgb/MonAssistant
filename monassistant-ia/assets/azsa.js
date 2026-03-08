@@ -333,7 +333,12 @@
         var reply = data.reply || 'Je n\'ai pas pu répondre pour le moment.';
         push('bot', reply);
 
-        if (Array.isArray(data.sources) && data.sources.length) {
+        if (Array.isArray(data.suggestions) && data.suggestions.length) {
+          var suggestions = data.suggestions.slice(0, 3).map(function (s) {
+            return (s || '').toString().trim();
+          }).filter(Boolean);
+          renderChips(suggestions);
+        } else if (Array.isArray(data.sources) && data.sources.length) {
           var suggestions = data.sources.slice(0, 3).map(function (s) {
             return s && s.title ? ('Voir: ' + s.title) : '';
           }).filter(Boolean);

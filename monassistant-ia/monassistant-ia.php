@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.3.8
+ * Version: 2.3.9
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.3.8';
+    const VERSION = '2.3.9';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
     const CRON_HOOK = 'azsa_rebuild_index_cron';
@@ -66,10 +66,13 @@ final class AZSA_Plugin {
     public static function activate() {
         $settings = self::get_settings();
         update_option(self::OPTION_SETTINGS, $settings, false);
-        if (!wp_next_scheduled(self::CRON_HOOK)) {
+        $has_recurring = wp_next_scheduled(self::CRON_HOOK);
+        if (!$has_recurring) {
             wp_schedule_event(time() + 300, 'hourly', self::CRON_HOOK);
         }
-        self::rebuild_index();
+        // Avoid timeout on activation: rebuild index asynchronously.
+        update_option('azsa_needs_reindex', 1, false);
+        wp_schedule_single_event(time() + 20, self::CRON_HOOK);
     }
 
     public static function deactivate() {
@@ -497,13 +500,22 @@ final class AZSA_Plugin {
         $hits = self::search_docs($message, $docs, 5);
         $settings = self::get_settings();
 
-        $reply = self::llm_reply($message, $hits, $settings);
+        $llm = self::llm_reply($message, $hits, $settings);
+        $reply = isset($llm['reply']) ? (string) $llm['reply'] : '';
         if ($reply === '') {
             $reply = self::local_reply($message, $hits);
+        }
+        $suggestions = array();
+        if (!empty($llm['suggestions']) && is_array($llm['suggestions'])) {
+            $suggestions = array_values(array_slice(array_filter(array_map('trim', $llm['suggestions'])), 0, 4));
+        }
+        if (empty($suggestions)) {
+            $suggestions = self::local_suggestions($message, $hits, $reply);
         }
 
         return new WP_REST_Response(array(
             'reply' => $reply,
+            'suggestions' => $suggestions,
             'sources' => array_map(function ($d) {
                 return array('title' => $d['title'], 'url' => $d['url']);
             }, $hits),
@@ -573,7 +585,7 @@ final class AZSA_Plugin {
             $api_key = (string) ANTHROPIC_API_KEY;
         }
         if ($api_key === '') {
-            return '';
+            return array('reply' => '', 'suggestions' => array());
         }
 
         $ctx = array();
@@ -581,12 +593,16 @@ final class AZSA_Plugin {
             $ctx[] = "Titre: {$h['title']}\nURL: {$h['url']}\nContenu: {$h['content']}";
         }
 
-        $system = "Tu es un assistant homme pour le site. Réponds en français (sauf demande explicite), ton professionnel et clair. Base-toi uniquement sur les extraits fournis. Si info manquante: dis-le clairement.";
+        $system = "Tu es un assistant expert du site web. Réponds en français (sauf demande explicite), ton clair, naturel, ponctué, avec accents corrects. "
+            . "Base-toi uniquement sur les extraits fournis. Si info manquante: dis-le clairement. "
+            . "Tu dois produire STRICTEMENT du JSON valide avec ce schéma: "
+            . "{\"reply\":\"texte réponse utile\",\"suggestions\":[\"question courte 1\",\"question courte 2\",\"question courte 3\"]}. "
+            . "Les suggestions doivent être contextuelles à la question et à ta réponse, max 3 à 4 mots chacune, sans URL, sans ponctuation finale.";
 
         $payload = array(
             'model' => $settings['model'] ?: 'claude-sonnet-4-20250514',
-            'max_tokens' => 260,
-            'temperature' => 0.2,
+            'max_tokens' => 420,
+            'temperature' => 0.35,
             'system' => $system,
             'messages' => array(
                 array(
@@ -594,7 +610,8 @@ final class AZSA_Plugin {
                     'content' => array(
                         array(
                             'type' => 'text',
-                            'text' => "Question: " . wp_strip_all_tags($message) . "\n\nExtraits site:\n" . implode("\n\n---\n\n", $ctx),
+                            'text' => "Question utilisateur: " . wp_strip_all_tags($message) . "\n\n"
+                                . "Extraits du site:\n" . implode("\n\n---\n\n", $ctx),
                         ),
                     ),
                 ),
@@ -612,17 +629,17 @@ final class AZSA_Plugin {
         ));
 
         if (is_wp_error($res)) {
-            return '';
+            return array('reply' => '', 'suggestions' => array());
         }
 
         $code = wp_remote_retrieve_response_code($res);
         if ($code >= 300) {
-            return '';
+            return array('reply' => '', 'suggestions' => array());
         }
 
         $body = json_decode(wp_remote_retrieve_body($res), true);
         if (!is_array($body) || empty($body['content'])) {
-            return '';
+            return array('reply' => '', 'suggestions' => array());
         }
 
         $text = '';
@@ -632,7 +649,74 @@ final class AZSA_Plugin {
             }
         }
 
-        return trim(wp_strip_all_tags($text));
+        $raw = trim((string) $text);
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            if (preg_match('/\{.*\}/s', $raw, $m)) {
+                $decoded = json_decode($m[0], true);
+            }
+        }
+
+        if (is_array($decoded) && !empty($decoded['reply'])) {
+            $reply = trim(wp_strip_all_tags((string) $decoded['reply']));
+            $suggestions = array();
+            if (!empty($decoded['suggestions']) && is_array($decoded['suggestions'])) {
+                foreach ($decoded['suggestions'] as $s) {
+                    $s = trim(wp_strip_all_tags((string) $s));
+                    if ($s !== '') {
+                        $suggestions[] = $s;
+                    }
+                }
+            }
+            return array(
+                'reply' => $reply,
+                'suggestions' => array_values(array_slice(array_unique($suggestions), 0, 4)),
+            );
+        }
+
+        return array(
+            'reply' => trim(wp_strip_all_tags($raw)),
+            'suggestions' => array(),
+        );
+    }
+
+    public static function local_suggestions($message, $hits, $reply) {
+        $suggestions = array();
+
+        $normalized = strtolower(remove_accents((string) $message . ' ' . (string) $reply));
+        $topic_map = array(
+            'prix' => array('Comparer les offres', 'Voir les tarifs', 'Quel plan choisir'),
+            'tarif' => array('Comparer les offres', 'Voir les tarifs', 'Quel plan choisir'),
+            'offre' => array('Comparer les offres', 'Voir les tarifs', 'Quel plan choisir'),
+            'contact' => array('Comment vous contacter', 'Parler à un conseiller', 'Envoyer un message'),
+            'formation' => array('Programme complet', 'Durée de formation', 'Niveau requis'),
+            'rncp' => array('RNCP concernés', 'Préparer la certification', 'Compétences attendues'),
+            'rs ' => array('Références RS', 'Objectifs pédagogiques', 'Évaluation finale'),
+            'wordpress' => array('Créer un site WordPress', 'Choisir un hébergeur', 'Comparer les hébergeurs'),
+            'hebergement' => array('Comparer les hébergeurs', 'OVH ou Hostinger', 'Critères de choix'),
+            'assistant' => array('Fonctionnalités clés', 'Mode vocal ou écrit', 'Cas d usage'),
+            'demo' => array('Essayer la démo', 'Questions fréquentes', 'Exemple concret'),
+        );
+        foreach ($topic_map as $needle => $items) {
+            if (strpos($normalized, $needle) !== false) {
+                $suggestions = array_merge($suggestions, $items);
+            }
+        }
+
+        foreach (array_slice((array) $hits, 0, 3) as $hit) {
+            $title = trim(wp_strip_all_tags((string) ($hit['title'] ?? '')));
+            if ($title !== '') {
+                $suggestions[] = 'En savoir plus';
+                $suggestions[] = 'Voir cette section';
+                break;
+            }
+        }
+
+        if (empty($suggestions)) {
+            $suggestions = array('En savoir plus', 'Donner un exemple', 'Que faire ensuite');
+        }
+
+        return array_values(array_slice(array_unique($suggestions), 0, 3));
     }
 
     public static function local_reply($message, $hits) {
@@ -765,6 +849,7 @@ final class AZSA_Plugin {
     }
 
     public static function rebuild_index() {
+        update_option('azsa_needs_reindex', 0, false);
         $settings = self::get_settings();
         $max_pages = (int) $settings['max_pages'];
         $max_depth = (int) $settings['max_depth'];
