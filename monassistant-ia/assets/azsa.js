@@ -53,7 +53,13 @@
     form.appendChild(send);
 
     var bookingPane = createEl('aside', { class: 'azsa-booking', id: 'azsa-booking' });
+    var bookingActions = createEl('div', { class: 'azsa-booking-actions' });
+    var bookingDoneBtn = createEl('button', { type: 'button', id: 'azsa-booking-done' }, "J'ai reserve");
+    var bookingCloseBtn = createEl('button', { type: 'button', id: 'azsa-booking-close' }, 'Fermer');
     var bookingFrame = createEl('iframe', { id: 'azsa-booking-frame', title: 'Prise de RDV', loading: 'lazy', referrerpolicy: 'strict-origin-when-cross-origin' });
+    bookingActions.appendChild(bookingDoneBtn);
+    bookingActions.appendChild(bookingCloseBtn);
+    bookingPane.appendChild(bookingActions);
     bookingPane.appendChild(bookingFrame);
     var main = createEl('div', { class: 'azsa-main' });
     main.appendChild(head);
@@ -160,6 +166,13 @@
     function closeBooking() {
       panel.classList.remove('azsa-with-booking');
       bookingOpen = false;
+    }
+
+    function finishBookingManual() {
+      closeBooking();
+      lead.stage = 'ask_phone_after_booking';
+      push('bot', "Super. Je prends en compte votre réservation. Souhaitez-vous laisser un numéro de téléphone ? (ou tapez \"Passer\")");
+      renderChips(['Passer']);
     }
 
     function hideNudge() {
@@ -362,6 +375,12 @@
       hideNudge();
       nudgePausedUntil = Date.now() + 90000;
     });
+    bookingDoneBtn.addEventListener('click', function () {
+      finishBookingManual();
+    });
+    bookingCloseBtn.addEventListener('click', function () {
+      closeBooking();
+    });
     window.addEventListener('message', function (e) {
       if (!e || typeof e.data === 'undefined' || e.data === null) return;
       var data = e.data;
@@ -370,7 +389,8 @@
       }
       if (!data || typeof data !== 'object') return;
       var evt = data.event || data.event_name || ((data.data && data.data.event) ? data.data.event : '');
-      if (evt === 'calendly.event_scheduled') {
+      evt = (evt || '').toString().toLowerCase();
+      if (evt === 'calendly.event_scheduled' || evt.indexOf('event_scheduled') !== -1 || evt.indexOf('invitee.created') !== -1) {
         var payload = data.payload || (data.data && data.data.payload) || {};
         onCalendlyScheduled(payload);
       }
@@ -570,10 +590,7 @@
 
       if (lead.stage === 'await_booking') {
         if (/^j ai reserve$/i.test(normalized) || /^j'ai reserve$/i.test(normalized) || /^jai reserve$/i.test(normalized)) {
-          closeBooking();
-          lead.stage = 'ask_phone_after_booking';
-          push('bot', "Super. Souhaitez-vous laisser un numéro de téléphone pour faciliter le rappel ? (ou tapez \"Passer\")");
-          renderChips(['Passer']);
+          finishBookingManual();
           return true;
         }
         push('bot', "Dès que votre créneau est choisi dans le calendrier, cliquez sur \"J ai reserve\".");
