@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.8.7
+ * Version: 2.8.8
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.8.7';
+    const VERSION = '2.8.8';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -31,7 +31,7 @@ final class AZSA_Plugin {
         add_filter('pre_set_site_transient_update_plugins', array(__CLASS__, 'check_for_updates'));
         add_filter('plugins_api', array(__CLASS__, 'plugin_info_popup'), 10, 3);
         add_filter('plugins_auto_update_enabled', '__return_true');
-        add_filter('plugin_action_links_' . plugin_basename(__FILE__), array(__CLASS__, 'plugin_action_links'));
+        add_filter('plugin_auto_update_setting_html', array(__CLASS__, 'plugin_auto_update_setting_html'), 10, 3);
         add_action('admin_init', array(__CLASS__, 'handle_plugin_row_auto_update_toggle'));
         add_action('upgrader_process_complete', array(__CLASS__, 'clear_update_cache'), 10, 2);
 
@@ -1017,9 +1017,10 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         update_site_option('auto_update_plugins', $list);
     }
 
-    public static function plugin_action_links($links) {
-        if (!is_array($links)) {
-            $links = array();
+    public static function plugin_auto_update_setting_html($html, $plugin_file, $plugin_data) {
+        $self_plugin = plugin_basename(__FILE__);
+        if ((string) $plugin_file !== (string) $self_plugin) {
+            return $html;
         }
         $mode = self::is_auto_updates_enabled() ? 'off' : 'on';
         $label = ($mode === 'on') ? 'Activer auto-update' : 'Désactiver auto-update';
@@ -1033,8 +1034,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             ),
             'azsa_toggle_auto_update'
         );
-        $links[] = '<a href="' . esc_url($url) . '">' . esc_html($label) . '</a>';
-        return $links;
+        return '<a href="' . esc_url($url) . '">' . esc_html($label) . '</a>';
     }
 
     public static function handle_plugin_row_auto_update_toggle() {
