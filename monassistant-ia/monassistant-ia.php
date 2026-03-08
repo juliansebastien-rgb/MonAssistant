@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.8.1
+ * Version: 2.8.2
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.8.1';
+    const VERSION = '2.8.2';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -137,11 +137,37 @@ final class AZSA_Plugin {
     }
 
     public static function admin_menu() {
-        add_options_page(
+        add_menu_page(
             'Chatbot Mon Assistant IA',
             'Chatbot Mon Assistant IA',
             'manage_options',
-            'azertaf-assistant',
+            'azsa-prospects',
+            array(__CLASS__, 'render_prospects_page'),
+            'dashicons-format-chat',
+            58
+        );
+        add_submenu_page(
+            'azsa-prospects',
+            'Liste des prospects',
+            'Liste des prospects',
+            'manage_options',
+            'azsa-prospects',
+            array(__CLASS__, 'render_prospects_page')
+        );
+        add_submenu_page(
+            'azsa-prospects',
+            'Liste des RDV',
+            'Liste des RDV',
+            'manage_options',
+            'azsa-rdv',
+            array(__CLASS__, 'render_rdv_page')
+        );
+        add_submenu_page(
+            'azsa-prospects',
+            'Réglages',
+            'Réglages',
+            'manage_options',
+            'azsa-settings',
             array(__CLASS__, 'render_admin_page')
         );
     }
@@ -227,38 +253,304 @@ final class AZSA_Plugin {
                 <?php endif; ?>
             </form>
 
-            <form method="post" action="options.php">
-                <?php settings_fields('azsa_settings_group'); ?>
-                <table class="form-table" role="presentation">
-                    <tr>
-                        <th scope="row"><label for="azsa_calendar_provider">Agenda RDV</label></th>
-                        <td>
-                            <select id="azsa_calendar_provider" name="<?php echo self::OPTION_SETTINGS; ?>[calendar_provider]">
-                                <option value="none" <?php selected($settings['calendar_provider'] ?? 'none', 'none'); ?>>Aucun</option>
-                                <option value="calendly" <?php selected($settings['calendar_provider'] ?? 'none', 'calendly'); ?>>Calendly</option>
-                            </select>
-                            <p class="description">Calendly affichera un calendrier de disponibilités dans le chat lors d'une demande de RDV.</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_calendly_url">URL Calendly</label></th>
-                        <td>
-                            <input id="azsa_calendly_url" name="<?php echo self::OPTION_SETTINGS; ?>[calendly_url]" type="url" class="regular-text" value="<?php echo esc_attr($settings['calendly_url'] ?? ''); ?>" placeholder="https://calendly.com/votre-compte/votre-lien" />
-                            <p class="description">URL de prise de RDV publique Calendly (embed).</p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row"><label for="azsa_calendly_pat">Calendly PAT</label></th>
-                        <td>
-                            <input id="azsa_calendly_pat" name="<?php echo self::OPTION_SETTINGS; ?>[calendly_pat]" type="password" class="regular-text" value="<?php echo esc_attr($settings['calendly_pat'] ?? ''); ?>" autocomplete="off" />
-                            <p class="description">Token personnel Calendly (Personal Access Token) pour récupérer nom, prénom, email et créneau du RDV.</p>
-                        </td>
-                    </tr>
-                </table>
-                <?php submit_button('Enregistrer'); ?>
-            </form>
+            <div style="display:flex;gap:20px;align-items:flex-start;max-width:1200px;">
+                <div style="flex:1 1 760px;min-width:520px;">
+                    <form method="post" action="options.php">
+                        <?php settings_fields('azsa_settings_group'); ?>
+                        <table class="form-table" role="presentation">
+                            <tr>
+                                <th scope="row"><label for="azsa_calendar_provider">Agenda RDV</label></th>
+                                <td>
+                                    <select id="azsa_calendar_provider" name="<?php echo self::OPTION_SETTINGS; ?>[calendar_provider]">
+                                        <option value="none" <?php selected($settings['calendar_provider'] ?? 'none', 'none'); ?>>Aucun</option>
+                                        <option value="calendly" <?php selected($settings['calendar_provider'] ?? 'none', 'calendly'); ?>>Calendly</option>
+                                    </select>
+                                    <p class="description">Calendly affichera un calendrier de disponibilités dans le chat lors d'une demande de RDV.</p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><label for="azsa_calendly_url">URL Calendly</label></th>
+                                <td>
+                                    <input id="azsa_calendly_url" name="<?php echo self::OPTION_SETTINGS; ?>[calendly_url]" type="url" class="regular-text" value="<?php echo esc_attr($settings['calendly_url'] ?? ''); ?>" placeholder="https://calendly.com/votre-compte/votre-lien" />
+                                    <p class="description">URL de prise de RDV publique Calendly (embed).</p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><label for="azsa_calendly_pat">Calendly PAT</label></th>
+                                <td>
+                                    <input id="azsa_calendly_pat" name="<?php echo self::OPTION_SETTINGS; ?>[calendly_pat]" type="password" class="regular-text" value="<?php echo esc_attr($settings['calendly_pat'] ?? ''); ?>" autocomplete="off" />
+                                    <p class="description">Token personnel Calendly (Personal Access Token) pour récupérer nom, prénom, email et créneau du RDV.</p>
+                                </td>
+                            </tr>
+                        </table>
+                        <?php submit_button('Enregistrer'); ?>
+                    </form>
+                </div>
+                <aside style="width:340px;background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);">
+                    <h2 style="margin-top:0;">Aide Calendly</h2>
+                    <ol style="margin-left:18px;">
+                        <li>Ouvrez Calendly puis <code>Integrations & apps</code> > <code>API and Webhooks</code>.</li>
+                        <li>Créez un <code>Personal Access Token</code> (PAT).</li>
+                        <li>Copiez votre lien public Calendly (ex: <code>https://calendly.com/votre-compte/votre-event</code>).</li>
+                        <li>Collez le lien dans <strong>URL Calendly</strong>.</li>
+                        <li>Collez le token dans <strong>Calendly PAT</strong>.</li>
+                        <li>Enregistrez puis testez un RDV dans le chatbot.</li>
+                    </ol>
+                    <p style="margin-bottom:0;color:#50575e;">Le PAT sert uniquement à récupérer automatiquement nom, prénom, email et créneau après réservation.</p>
+                </aside>
+            </div>
         </div>
         <?php
+    }
+
+    public static function get_leads() {
+        $leads = get_option(self::OPTION_LEADS, array());
+        return is_array($leads) ? $leads : array();
+    }
+
+    public static function update_leads($leads) {
+        if (!is_array($leads)) {
+            $leads = array();
+        }
+        update_option(self::OPTION_LEADS, $leads, false);
+    }
+
+    public static function process_lead_actions() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $action = sanitize_text_field((string) ($_GET['azsa_action'] ?? ''));
+        $ref = sanitize_text_field((string) ($_GET['ref'] ?? ''));
+        $nonce = sanitize_text_field((string) ($_GET['_wpnonce'] ?? ''));
+        if ($action === '' || $ref === '') {
+            return;
+        }
+        if (!wp_verify_nonce($nonce, 'azsa_lead_action_' . $ref)) {
+            return;
+        }
+        $leads = self::get_leads();
+        $changed = false;
+        foreach ($leads as &$lead) {
+            if ((string) ($lead['ref'] ?? '') !== $ref) {
+                continue;
+            }
+            if ($action === 'mark_callback_open') {
+                $lead['callback_status'] = 'open';
+                $changed = true;
+            } elseif ($action === 'mark_callback_done') {
+                $lead['callback_status'] = 'done';
+                $changed = true;
+            } elseif ($action === 'clear_callback') {
+                unset($lead['callback_status']);
+                $changed = true;
+            }
+            break;
+        }
+        unset($lead);
+        if ($changed) {
+            self::update_leads($leads);
+        }
+    }
+
+    public static function current_lead_filters() {
+        return array(
+            'q' => sanitize_text_field((string) ($_GET['q'] ?? '')),
+            'email' => sanitize_text_field((string) ($_GET['email'] ?? '')),
+            'phone' => sanitize_text_field((string) ($_GET['phone'] ?? '')),
+            'date_from' => sanitize_text_field((string) ($_GET['date_from'] ?? '')),
+            'date_to' => sanitize_text_field((string) ($_GET['date_to'] ?? '')),
+            'sort' => sanitize_text_field((string) ($_GET['sort'] ?? 'date_desc')),
+        );
+    }
+
+    public static function filter_leads($rows, $filters) {
+        $q = strtolower((string) ($filters['q'] ?? ''));
+        $email = strtolower((string) ($filters['email'] ?? ''));
+        $phone = strtolower((string) ($filters['phone'] ?? ''));
+        $date_from = (string) ($filters['date_from'] ?? '');
+        $date_to = (string) ($filters['date_to'] ?? '');
+
+        $filtered = array_values(array_filter((array) $rows, function ($lead) use ($q, $email, $phone, $date_from, $date_to) {
+            $created = (string) ($lead['created_at'] ?? '');
+            $stack = strtolower(implode(' ', array(
+                (string) ($lead['ref'] ?? ''),
+                (string) ($lead['first_name'] ?? ''),
+                (string) ($lead['last_name'] ?? ''),
+                (string) ($lead['email'] ?? ''),
+                (string) ($lead['phone'] ?? ''),
+                (string) ($lead['intent'] ?? ''),
+            )));
+            if ($q !== '' && strpos($stack, $q) === false) {
+                return false;
+            }
+            if ($email !== '' && strpos(strtolower((string) ($lead['email'] ?? '')), $email) === false) {
+                return false;
+            }
+            if ($phone !== '' && strpos(strtolower((string) ($lead['phone'] ?? '')), $phone) === false) {
+                return false;
+            }
+            if ($date_from !== '' && $created !== '' && strtotime($created) < strtotime($date_from . ' 00:00:00')) {
+                return false;
+            }
+            if ($date_to !== '' && $created !== '' && strtotime($created) > strtotime($date_to . ' 23:59:59')) {
+                return false;
+            }
+            return true;
+        }));
+
+        $sort = (string) ($filters['sort'] ?? 'date_desc');
+        usort($filtered, function ($a, $b) use ($sort) {
+            $ta = strtotime((string) ($a['created_at'] ?? '')) ?: 0;
+            $tb = strtotime((string) ($b['created_at'] ?? '')) ?: 0;
+            if ($sort === 'date_asc') {
+                return $ta <=> $tb;
+            }
+            return $tb <=> $ta;
+        });
+
+        return $filtered;
+    }
+
+    public static function render_leads_filters_form($page_slug, $filters) {
+        echo '<form method="get" style="margin: 0 0 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:end;">';
+        echo '<input type="hidden" name="page" value="' . esc_attr($page_slug) . '" />';
+        echo '<div><label for="azsa_filter_q">Recherche</label><br/><input id="azsa_filter_q" type="text" name="q" value="' . esc_attr($filters['q'] ?? '') . '" placeholder="nom, email, ref..." /></div>';
+        echo '<div><label for="azsa_filter_email">Email</label><br/><input id="azsa_filter_email" type="text" name="email" value="' . esc_attr($filters['email'] ?? '') . '" /></div>';
+        echo '<div><label for="azsa_filter_phone">Téléphone</label><br/><input id="azsa_filter_phone" type="text" name="phone" value="' . esc_attr($filters['phone'] ?? '') . '" /></div>';
+        echo '<div><label for="azsa_filter_date_from">Du</label><br/><input id="azsa_filter_date_from" type="date" name="date_from" value="' . esc_attr($filters['date_from'] ?? '') . '" /></div>';
+        echo '<div><label for="azsa_filter_date_to">Au</label><br/><input id="azsa_filter_date_to" type="date" name="date_to" value="' . esc_attr($filters['date_to'] ?? '') . '" /></div>';
+        echo '<div><label for="azsa_filter_sort">Tri</label><br/><select id="azsa_filter_sort" name="sort">'
+            . '<option value="date_desc"' . selected(($filters['sort'] ?? 'date_desc'), 'date_desc', false) . '>Plus récent</option>'
+            . '<option value="date_asc"' . selected(($filters['sort'] ?? 'date_desc'), 'date_asc', false) . '>Plus ancien</option>'
+            . '</select></div>';
+        echo '<div><button class="button button-primary" type="submit">Filtrer</button></div>';
+        echo '<div><a class="button" href="' . esc_url(admin_url('admin.php?page=' . $page_slug)) . '">Réinitialiser</a></div>';
+        echo '</form>';
+    }
+
+    public static function render_leads_table($rows) {
+        if (empty($rows)) {
+            echo '<p>Aucun enregistrement pour le moment.</p>';
+            return;
+        }
+        echo '<table class="widefat striped"><thead><tr>';
+        echo '<th>Réf</th><th>Date</th><th>Prénom</th><th>Nom</th><th>Email</th><th>Téléphone</th><th>Demande</th><th>Rappel</th><th>Actions rapides</th>';
+        echo '</tr></thead><tbody>';
+        foreach ($rows as $lead) {
+            $ref = esc_html((string) ($lead['ref'] ?? ''));
+            $date = esc_html((string) ($lead['created_at'] ?? ''));
+            $first = esc_html((string) ($lead['first_name'] ?? ''));
+            $last = esc_html((string) ($lead['last_name'] ?? ''));
+            $email = esc_html((string) ($lead['email'] ?? ''));
+            $phone = esc_html((string) ($lead['phone'] ?? ''));
+            $email_raw = (string) ($lead['email'] ?? '');
+            $phone_raw = (string) ($lead['phone'] ?? '');
+            $transcript = esc_html((string) ($lead['transcript'] ?? ''));
+            $demand = !empty($lead['wants_rdv']) ? 'RDV téléphonique' : 'Prospect';
+            $callback_status = (string) ($lead['callback_status'] ?? '');
+            $ref_raw = (string) ($lead['ref'] ?? '');
+            $nonce = wp_create_nonce('azsa_lead_action_' . $ref_raw);
+            $open_url = add_query_arg(array(
+                'page' => sanitize_text_field((string) ($_GET['page'] ?? 'azsa-prospects')),
+                'azsa_action' => 'mark_callback_open',
+                'ref' => $ref_raw,
+                '_wpnonce' => $nonce,
+            ), admin_url('admin.php'));
+            $done_url = add_query_arg(array(
+                'page' => sanitize_text_field((string) ($_GET['page'] ?? 'azsa-prospects')),
+                'azsa_action' => 'mark_callback_done',
+                'ref' => $ref_raw,
+                '_wpnonce' => $nonce,
+            ), admin_url('admin.php'));
+            $clear_url = add_query_arg(array(
+                'page' => sanitize_text_field((string) ($_GET['page'] ?? 'azsa-prospects')),
+                'azsa_action' => 'clear_callback',
+                'ref' => $ref_raw,
+                '_wpnonce' => $nonce,
+            ), admin_url('admin.php'));
+            echo '<tr>';
+            echo '<td>' . $ref . '</td><td>' . $date . '</td><td>' . $first . '</td><td>' . $last . '</td><td>' . $email . '</td><td>' . $phone . '</td><td>' . esc_html($demand) . '</td>';
+            echo '<td>';
+            if ($callback_status === 'done') {
+                echo '<span style="display:inline-block;padding:3px 8px;border-radius:999px;background:#e7f7ed;color:#0a7f33;font-weight:600;">Fait</span>';
+            } elseif ($callback_status === 'open') {
+                echo '<span style="display:inline-block;padding:3px 8px;border-radius:999px;background:#fff4e5;color:#a05a00;font-weight:600;">À faire</span>';
+            } else {
+                echo '<span style="display:inline-block;padding:3px 8px;border-radius:999px;background:#f0f0f1;color:#50575e;">-</span>';
+            }
+            echo '</td>';
+            echo '<td style="white-space:nowrap;">';
+            if ($callback_status !== 'open') {
+                echo '<a class="button button-small" href="' . esc_url($open_url) . '">Créer tâche rappel</a> ';
+            }
+            if ($callback_status === 'open') {
+                echo '<a class="button button-small" href="' . esc_url($done_url) . '">Rappel fait</a> ';
+            }
+            if ($callback_status !== '') {
+                echo '<a class="button button-small" href="' . esc_url($clear_url) . '">Retirer</a> ';
+            }
+            if ($email_raw !== '') {
+                echo '<a class="button button-small" href="mailto:' . esc_attr($email_raw) . '">Email</a> ';
+                echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier email" data-copy="' . esc_attr($email_raw) . '">Copier email</button> ';
+            }
+            if ($phone_raw !== '') {
+                echo '<a class="button button-small" href="tel:' . esc_attr($phone_raw) . '">Appeler</a> ';
+                echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier tél" data-copy="' . esc_attr($phone_raw) . '">Copier tél</button> ';
+            }
+            if ($transcript !== '') {
+                echo '<details style="display:inline-block;vertical-align:middle;"><summary class="button button-small" style="cursor:pointer;">Transcript</summary><div style="margin-top:8px;max-width:480px;max-height:220px;overflow:auto;white-space:pre-wrap;border:1px solid #dcdcde;padding:8px;background:#fff;">' . $transcript . '</div></details>';
+            }
+            echo '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+        echo "<script>
+document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var t = btn.getAttribute('data-copy') || '';
+    var label = btn.getAttribute('data-label') || 'Copier';
+    if (!t) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(function(){ btn.textContent='Copié'; setTimeout(function(){ btn.textContent = label; }, 1200); });
+    } else {
+      var ta = document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+      btn.textContent='Copié'; setTimeout(function(){ btn.textContent = label; }, 1200);
+    }
+  });
+});
+</script>";
+    }
+
+    public static function render_prospects_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        self::process_lead_actions();
+        $leads = array_values(array_filter(self::get_leads(), function ($l) {
+            return empty($l['wants_rdv']);
+        }));
+        $filters = self::current_lead_filters();
+        $leads = self::filter_leads($leads, $filters);
+        echo '<div class="wrap"><h1>Liste des prospects</h1>';
+        self::render_leads_filters_form('azsa-prospects', $filters);
+        self::render_leads_table($leads);
+        echo '</div>';
+    }
+
+    public static function render_rdv_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        self::process_lead_actions();
+        $leads = array_values(array_filter(self::get_leads(), function ($l) {
+            return !empty($l['wants_rdv']) || (($l['intent'] ?? '') === 'rdv');
+        }));
+        $filters = self::current_lead_filters();
+        $leads = self::filter_leads($leads, $filters);
+        echo '<div class="wrap"><h1>Liste des RDV</h1>';
+        self::render_leads_filters_form('azsa-rdv', $filters);
+        self::render_leads_table($leads);
+        echo '</div>';
     }
 
     public static function register_rest() {

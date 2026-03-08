@@ -647,6 +647,7 @@
         }
         lead.stage = 'done';
         closeBooking();
+        renderChips([]);
         setStatus('Prêt', false);
         return true;
       }
@@ -699,6 +700,7 @@
         }
         lead.stage = 'done';
         closeBooking();
+        renderChips([]);
         setStatus('Prêt', false);
         return true;
       }
