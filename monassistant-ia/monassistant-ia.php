@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.8.9
+ * Version: 2.9.0
  * Author: Azertaf
  */
 
@@ -11,9 +11,10 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.8.9';
+    const VERSION = '2.9.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
+    const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
     const OPTION_INDEX = 'azsa_index';
     const CRON_HOOK = 'azsa_rebuild_index_cron';
     const DEFAULT_ROBOT_LOGO_URL = 'https://monassistant.mapage-wp.online/wp-content/uploads/2026/03/MAP-logo-tete.gif';
@@ -61,8 +62,64 @@ final class AZSA_Plugin {
         );
     }
 
-    public static function get_settings() {
-        $settings = get_option(self::OPTION_SETTINGS, array());
+    public static function normalize_owner_user_id($owner_user_id) {
+        $owner_user_id = (int) $owner_user_id;
+        if ($owner_user_id > 0) {
+            return $owner_user_id;
+        }
+        $fallback = self::get_public_owner_user_id();
+        return $fallback > 0 ? $fallback : 1;
+    }
+
+    public static function get_public_owner_user_id() {
+        $owner_user_id = (int) get_option(self::OPTION_PUBLIC_OWNER, 0);
+        if ($owner_user_id > 0) {
+            return $owner_user_id;
+        }
+        if (function_exists('get_users')) {
+            $admins = get_users(array(
+                'role' => 'administrator',
+                'number' => 1,
+                'orderby' => 'ID',
+                'order' => 'ASC',
+                'fields' => 'ID',
+            ));
+            if (!empty($admins[0])) {
+                return (int) $admins[0];
+            }
+        }
+        return 1;
+    }
+
+    public static function set_public_owner_user_id($owner_user_id) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        update_option(self::OPTION_PUBLIC_OWNER, $owner_user_id, false);
+        return $owner_user_id;
+    }
+
+    public static function get_runtime_owner_user_id() {
+        $uid = (int) get_current_user_id();
+        if ($uid > 0 && is_admin() && current_user_can('manage_options')) {
+            return $uid;
+        }
+        return self::get_public_owner_user_id();
+    }
+
+    public static function get_settings($owner_user_id = null) {
+        if ($owner_user_id === null) {
+            $owner_user_id = self::get_runtime_owner_user_id();
+        }
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $raw = get_option(self::OPTION_SETTINGS, array());
+        $settings = array();
+        if (is_array($raw) && isset($raw['by_owner']) && is_array($raw['by_owner'])) {
+            $settings = isset($raw['by_owner'][(string) $owner_user_id]) && is_array($raw['by_owner'][(string) $owner_user_id])
+                ? $raw['by_owner'][(string) $owner_user_id]
+                : array();
+        } elseif (is_array($raw)) {
+            // Backward compatibility with legacy flat option shape.
+            $settings = $raw;
+        }
         $settings = wp_parse_args(is_array($settings) ? $settings : array(), self::defaults());
         // Zero-config updates: always use the official repo embedded in plugin code.
         $settings['github_repo'] = self::DEFAULT_GITHUB_REPO;
@@ -70,8 +127,14 @@ final class AZSA_Plugin {
     }
 
     public static function activate() {
-        $settings = self::get_settings();
-        update_option(self::OPTION_SETTINGS, $settings, false);
+        $owner_user_id = self::set_public_owner_user_id(get_current_user_id());
+        $settings = self::get_settings($owner_user_id);
+        $raw = get_option(self::OPTION_SETTINGS, array());
+        if (!is_array($raw) || !isset($raw['by_owner']) || !is_array($raw['by_owner'])) {
+            $raw = array('by_owner' => array());
+        }
+        $raw['by_owner'][(string) $owner_user_id] = $settings;
+        update_option(self::OPTION_SETTINGS, $raw, false);
         $has_recurring = wp_next_scheduled(self::CRON_HOOK);
         if (!$has_recurring) {
             wp_schedule_event(time() + 300, 'hourly', self::CRON_HOOK);
@@ -179,7 +242,8 @@ final class AZSA_Plugin {
     }
 
     public static function sanitize_settings($input) {
-        $out = self::get_settings();
+        $owner_user_id = self::get_runtime_owner_user_id();
+        $out = self::get_settings($owner_user_id);
         if (isset($input['calendar_provider'])) {
             $provider = sanitize_key((string) $input['calendar_provider']);
             $out['calendar_provider'] = in_array($provider, array('none', 'calendly'), true) ? $provider : 'none';
@@ -191,7 +255,26 @@ final class AZSA_Plugin {
             $out['calendly_pat'] = sanitize_text_field((string) $input['calendly_pat']);
         }
         $out['github_repo'] = self::DEFAULT_GITHUB_REPO;
-        return wp_parse_args($out, self::defaults());
+        $out = wp_parse_args($out, self::defaults());
+
+        $raw = get_option(self::OPTION_SETTINGS, array());
+        if (!is_array($raw)) {
+            $raw = array();
+        }
+        // Migrate legacy flat shape to scoped by owner.
+        if (!isset($raw['by_owner']) || !is_array($raw['by_owner'])) {
+            $legacy = array();
+            if (isset($raw['calendar_provider']) || isset($raw['calendly_url']) || isset($raw['calendly_pat'])) {
+                $legacy = wp_parse_args($raw, self::defaults());
+            }
+            $raw = array('by_owner' => array());
+            if (!empty($legacy)) {
+                $raw['by_owner'][(string) self::get_public_owner_user_id()] = $legacy;
+            }
+        }
+        $raw['by_owner'][(string) $owner_user_id] = $out;
+        self::set_public_owner_user_id($owner_user_id);
+        return $raw;
     }
 
     public static function render_admin_page() {
@@ -305,7 +388,7 @@ final class AZSA_Plugin {
         <?php
     }
 
-    public static function get_leads() {
+    public static function get_all_leads_raw() {
         $raw = get_option(self::OPTION_LEADS, null);
         if ($raw === null) {
             // Legacy fallback keys.
@@ -318,18 +401,48 @@ final class AZSA_Plugin {
                 }
             }
         }
-        $leads = self::normalize_leads($raw);
-        if (!empty($leads)) {
-            return $leads;
-        }
-        return array();
+        return self::normalize_leads($raw);
     }
 
-    public static function update_leads($leads) {
+    public static function get_leads($owner_user_id = null) {
+        if ($owner_user_id === null) {
+            $owner_user_id = self::get_runtime_owner_user_id();
+        }
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $all = self::get_all_leads_raw();
+        return array_values(array_filter($all, function ($lead) use ($owner_user_id) {
+            return self::lead_visible_for_owner($lead, $owner_user_id);
+        }));
+    }
+
+    public static function update_leads($leads, $owner_user_id = null) {
         if (!is_array($leads)) {
             $leads = array();
         }
-        update_option(self::OPTION_LEADS, $leads, false);
+        if ($owner_user_id === null) {
+            $owner_user_id = self::get_runtime_owner_user_id();
+        }
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $normalized = self::normalize_leads($leads);
+        foreach ($normalized as &$row) {
+            $row['owner_user_id'] = $owner_user_id;
+        }
+        unset($row);
+
+        $all = self::get_all_leads_raw();
+        $kept = array_values(array_filter($all, function ($lead) use ($owner_user_id) {
+            return !self::lead_visible_for_owner($lead, $owner_user_id);
+        }));
+        $merged = array_merge($normalized, $kept);
+        usort($merged, function ($a, $b) {
+            $ta = strtotime((string) ($a['created_at'] ?? '')) ?: 0;
+            $tb = strtotime((string) ($b['created_at'] ?? '')) ?: 0;
+            return $tb <=> $ta;
+        });
+        if (count($merged) > 3000) {
+            $merged = array_slice($merged, 0, 3000);
+        }
+        update_option(self::OPTION_LEADS, $merged, false);
     }
 
     public static function normalize_leads($raw) {
@@ -362,11 +475,21 @@ final class AZSA_Plugin {
                 'phone' => (string) ($lead['phone'] ?? ''),
                 'intent' => (string) ($lead['intent'] ?? ''),
                 'wants_rdv' => !empty($lead['wants_rdv']) ? 1 : 0,
+                'page_url' => (string) ($lead['page_url'] ?? ''),
                 'transcript' => (string) ($lead['transcript'] ?? ''),
                 'callback_status' => (string) ($lead['callback_status'] ?? ''),
+                'owner_user_id' => self::normalize_owner_user_id((int) ($lead['owner_user_id'] ?? 0)),
             );
         }
         return $out;
+    }
+
+    public static function lead_owner_user_id($lead) {
+        return self::normalize_owner_user_id((int) ($lead['owner_user_id'] ?? 0));
+    }
+
+    public static function lead_visible_for_owner($lead, $owner_user_id) {
+        return self::lead_owner_user_id($lead) === self::normalize_owner_user_id($owner_user_id);
     }
 
     public static function is_rdv_lead($lead) {
@@ -1230,6 +1353,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
     }
 
     public static function rest_lead(WP_REST_Request $request) {
+        $owner_user_id = self::get_runtime_owner_user_id();
         $first_name = sanitize_text_field((string) $request->get_param('first_name'));
         $last_name = sanitize_text_field((string) $request->get_param('last_name'));
         $email = sanitize_email((string) $request->get_param('email'));
@@ -1253,6 +1377,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         $lead = array(
             'ref' => $ref,
             'created_at' => gmdate('c'),
+            'owner_user_id' => $owner_user_id,
             'first_name' => $first_name,
             'last_name' => $last_name,
             'email' => $email,
@@ -1263,17 +1388,14 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'transcript' => $transcript,
         );
 
-        $leads = get_option(self::OPTION_LEADS, array());
-        if (!is_array($leads)) {
-            $leads = array();
-        }
+        $leads = self::get_all_leads_raw();
         array_unshift($leads, $lead);
-        if (count($leads) > 1000) {
-            $leads = array_slice($leads, 0, 1000);
+        if (count($leads) > 3000) {
+            $leads = array_slice($leads, 0, 3000);
         }
         update_option(self::OPTION_LEADS, $leads, false);
 
-        $settings = self::get_settings();
+        $settings = self::get_settings($owner_user_id);
         $logo_url = trim((string) ($settings['logo_url'] ?? ''));
         if ($logo_url === '') {
             $logo_url = self::DEFAULT_ROBOT_LOGO_URL;
