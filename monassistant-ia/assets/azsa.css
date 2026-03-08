@@ -1,0 +1,176 @@
+#azsa-root { position: fixed; right: 18px; bottom: 18px; z-index: 99999; font-family: "Raleway", system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+#azsa-toggle {
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  border: 1px solid rgba(18,61,100,.26);
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(18,61,100,.28), inset 0 0 20px rgba(255,255,255,.36);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  overflow: hidden;
+}
+#azsa-toggle img { width: 100%; height: 100%; object-fit: contain; background: transparent; }
+#azsa-toggle:hover { transform: translateY(-1px); }
+
+#azsa-panel {
+  position: absolute;
+  right: 0;
+  bottom: 78px;
+  width: min(420px, 92vw);
+  height: min(620px, 78vh);
+  border: 1px solid rgba(18,61,100,.16);
+  border-radius: 18px;
+  background: rgba(255,255,255,.97);
+  box-shadow: 0 16px 40px rgba(18,61,100,.22);
+  display: none;
+  overflow: hidden;
+}
+#azsa-panel.azsa-open { display: flex; flex-direction: column; }
+
+.azsa-hero {
+  position: relative;
+  height: 140px;
+  border-bottom: 1px solid rgba(18,61,100,.10);
+  background: transparent;
+  overflow: hidden;
+}
+#azsa-stars {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: .9;
+}
+#azsa-character {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 0;
+  height: 128px;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 18px rgba(18,61,100,.20));
+}
+
+.azsa-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, #123d64 0%, #1c6ea4 100%);
+  color: #fff;
+}
+.azsa-head h4 { margin: 0; font-size: 15px; font-weight: 700; }
+.azsa-head small { display: block; opacity: .9; font-size: 11px; }
+.azsa-head-actions { display: flex; gap: 6px; align-items: center; }
+#azsa-mode, #azsa-mic {
+  border: 1px solid rgba(255,255,255,.28);
+  border-radius: 10px;
+  background: rgba(255,255,255,.16);
+  color: #fff;
+  height: 30px;
+  font-size: 11px;
+  padding: 0 9px;
+  cursor: pointer;
+}
+#azsa-mic { width: 34px; padding: 0; }
+#azsa-mic.azsa-hidden { display: none; }
+#azsa-close {
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255,255,255,.18);
+  color: #fff;
+  width: 30px;
+  height: 30px;
+  cursor: pointer;
+}
+
+.azsa-thread {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: linear-gradient(180deg, #f7fbff 0%, #ffffff 45%);
+}
+.azsa-row { display: flex; }
+.azsa-row-user { justify-content: flex-end; }
+.azsa-row-bot { justify-content: flex-start; }
+.azsa-bubble {
+  max-width: 86%;
+  border-radius: 14px;
+  padding: 9px 11px;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.azsa-row-user .azsa-bubble {
+  background: #123d64;
+  color: #fff;
+  border-bottom-right-radius: 6px;
+}
+.azsa-row-bot .azsa-bubble {
+  background: #edf6ff;
+  color: #123d64;
+  border: 1px solid rgba(18,61,100,.14);
+  border-bottom-left-radius: 6px;
+}
+
+.azsa-chips { display: flex; flex-wrap: wrap; gap: 7px; padding: 0 12px 8px; }
+.azsa-chip {
+  border: 1px solid rgba(18,61,100,.18);
+  background: #f4f9ff;
+  color: #123d64;
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.azsa-input {
+  padding: 10px;
+  border-top: 1px solid rgba(18,61,100,.12);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: #fff;
+}
+.azsa-input input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(18,61,100,.22);
+  border-radius: 12px;
+  padding: 9px 10px;
+  font-size: 14px;
+  color: #123d64;
+}
+.azsa-input button {
+  border: 1px solid rgba(18,61,100,.24);
+  border-radius: 12px;
+  background: #123d64;
+  color: #fff;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.azsa-status { padding: 0 12px 8px; font-size: 11px; color: rgba(18,61,100,.75); }
+.azsa-status.is-thinking { color: #1c6ea4; font-weight: 700; }
+
+@media (max-width: 760px) {
+  #azsa-root { right: 10px; bottom: 10px; }
+  #azsa-toggle { width: 58px; height: 58px; }
+  #azsa-panel {
+    right: -2px;
+    width: min(96vw, 460px);
+    height: min(82vh, 760px);
+    border-radius: 16px;
+  }
+  .azsa-hero { height: 126px; }
+  #azsa-character { height: 114px; left: 50%; transform: translateX(-50%); }
+}
