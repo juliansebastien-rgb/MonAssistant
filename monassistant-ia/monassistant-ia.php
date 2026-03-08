@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MonAssistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.3.5
+ * Version: 2.3.6
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.3.5';
+    const VERSION = '2.3.6';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
     const CRON_HOOK = 'azsa_rebuild_index_cron';

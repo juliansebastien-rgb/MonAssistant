@@ -39,11 +39,6 @@
     head.appendChild(headActions);
 
     var thread = createEl('div', { class: 'azsa-thread', id: 'azsa-thread' });
-    var hero = createEl('div', { class: 'azsa-hero', id: 'azsa-hero' });
-    var starsCanvas = createEl('canvas', { id: 'azsa-stars' });
-    var character = createEl('img', { id: 'azsa-character', alt: 'Assistant animé' });
-    hero.appendChild(starsCanvas);
-    hero.appendChild(character);
     var chips = createEl('div', { class: 'azsa-chips', id: 'azsa-chips' });
     var status = createEl('div', { class: 'azsa-status', id: 'azsa-status' }, 'Prêt');
 
@@ -55,7 +50,6 @@
     form.appendChild(send);
 
     panel.appendChild(head);
-    panel.appendChild(hero);
     panel.appendChild(thread);
     panel.appendChild(chips);
     panel.appendChild(status);
@@ -73,106 +67,13 @@
     var keepListening = false;
     var currentAudio = null;
     var selectedVoice = null;
-    var starCtx = null;
-    var starDots = [];
-    var starRAF = null;
-    var currentMood = 'idle';
-    var gifBase = (cfg.gifBaseUrl || '').trim();
-    if (gifBase && gifBase.slice(-1) !== '/') gifBase += '/';
-    var moodGifCandidates = {
-      welcome: [gifBase + '2-welcome.gif', gifBase + '2.gif', gifBase + '1.gif'],
-      idle: [gifBase + '15-est-tranquile.gif', gifBase + '15.gif', gifBase + '1.gif'],
-      listening: [gifBase + '9-regarde-avec-une-loupe.gif', gifBase + '9.gif', gifBase + '3.gif'],
-      thinking: [gifBase + '7-reflechit.gif', gifBase + '7.gif', gifBase + '6.gif'],
-      speaking: [gifBase + '19-parler.gif', gifBase + '19.gif', gifBase + '18.gif'],
-      success: [gifBase + '4-obtient-5-etoile.gif', gifBase + '4.gif', gifBase + '17.gif'],
-      error: [gifBase + '21-error.gif', gifBase + '21.gif', gifBase + '24.gif']
-    };
-    var moodGifIndex = {};
-    var lastMoodSrc = '';
 
     function setStatus(text, thinking) {
       status.textContent = text;
       status.classList.toggle('is-thinking', !!thinking);
     }
 
-    function setMood(mood) {
-      currentMood = mood || 'idle';
-      var candidates = moodGifCandidates[currentMood] || moodGifCandidates.idle || [];
-      var idx = moodGifIndex[currentMood] || 0;
-      var src = candidates[idx] || '';
-      if (src) {
-        character.style.display = '';
-        if (character.getAttribute('src') !== src || lastMoodSrc !== src) {
-          lastMoodSrc = src;
-          character.setAttribute('src', src);
-        }
-      } else {
-        character.style.display = 'none';
-      }
-    }
-
-    function initHeroVisual() {
-      // Never reuse the round button logo in hero area.
-      setMood('welcome');
-      character.onerror = function () {
-        var mood = currentMood || 'idle';
-        var candidates = moodGifCandidates[mood] || moodGifCandidates.idle || [];
-        var idx = (moodGifIndex[mood] || 0) + 1;
-        if (idx < candidates.length) {
-          moodGifIndex[mood] = idx;
-          setMood(mood);
-          return;
-        }
-        character.style.display = 'none';
-      };
-
-      starCtx = starsCanvas.getContext('2d');
-      if (!starCtx) return;
-      resizeStars();
-      for (var i = 0; i < 40; i += 1) {
-        starDots.push({
-          x: Math.random() * starsCanvas.clientWidth,
-          y: Math.random() * starsCanvas.clientHeight,
-          vx: (Math.random() - 0.5) * 0.35,
-          vy: (Math.random() - 0.5) * 0.35,
-          r: 0.7 + Math.random() * 1.7
-        });
-      }
-      drawStars();
-      window.addEventListener('resize', resizeStars);
-    }
-
-    function resizeStars() {
-      if (!starsCanvas) return;
-      var w = starsCanvas.clientWidth || hero.clientWidth || 380;
-      var h = starsCanvas.clientHeight || hero.clientHeight || 140;
-      var ratio = window.devicePixelRatio || 1;
-      starsCanvas.width = Math.floor(w * ratio);
-      starsCanvas.height = Math.floor(h * ratio);
-      if (starCtx) starCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    }
-
-    function drawStars() {
-      if (!starCtx) return;
-      var w = starsCanvas.clientWidth;
-      var h = starsCanvas.clientHeight;
-      starCtx.clearRect(0, 0, w, h);
-      for (var i = 0; i < starDots.length; i += 1) {
-        var d = starDots[i];
-        d.x += d.vx;
-        d.y += d.vy;
-        if (d.x < -10) d.x = w + 10;
-        if (d.x > w + 10) d.x = -10;
-        if (d.y < -10) d.y = h + 10;
-        if (d.y > h + 10) d.y = -10;
-        starCtx.beginPath();
-        starCtx.fillStyle = 'rgba(33,117,166,0.72)';
-        starCtx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
-        starCtx.fill();
-      }
-      starRAF = window.requestAnimationFrame(drawStars);
-    }
+    function setMood() {}
 
     function push(role, text) {
       var row = createEl('div', { class: 'azsa-row ' + (role === 'user' ? 'azsa-row-user' : 'azsa-row-bot') });
@@ -461,7 +362,6 @@
     });
 
     recognizer = setupRecognition();
-    initHeroVisual();
     if (window.speechSynthesis) {
       selectedVoice = pickFrenchMaleVoice();
       window.speechSynthesis.onvoiceschanged = function () {
@@ -471,8 +371,6 @@
 
     var welcome = cfg.welcome || 'Bonjour, je suis votre assistant.';
     push('bot', welcome);
-    setMood('welcome');
-    setTimeout(function () { if (!busy && !listening) setMood('idle'); }, 1200);
     renderChips([
       'Quels services propose ce site ?',
       'Comment vous contacter ?',
