@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.8.4
+ * Version: 2.8.6
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.8.4';
+    const VERSION = '2.8.6';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -31,6 +31,8 @@ final class AZSA_Plugin {
         add_filter('pre_set_site_transient_update_plugins', array(__CLASS__, 'check_for_updates'));
         add_filter('plugins_api', array(__CLASS__, 'plugin_info_popup'), 10, 3);
         add_filter('plugins_auto_update_enabled', '__return_true');
+        add_filter('plugin_action_links_' . plugin_basename(__FILE__), array(__CLASS__, 'plugin_action_links'));
+        add_action('admin_init', array(__CLASS__, 'handle_plugin_row_auto_update_toggle'));
         add_action('upgrader_process_complete', array(__CLASS__, 'clear_update_cache'), 10, 2);
 
         register_activation_hook(__FILE__, array(__CLASS__, 'activate'));
@@ -1001,6 +1003,47 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             }));
         }
         update_site_option('auto_update_plugins', $list);
+    }
+
+    public static function plugin_action_links($links) {
+        if (!is_array($links)) {
+            $links = array();
+        }
+        $mode = self::is_auto_updates_enabled() ? 'off' : 'on';
+        $label = ($mode === 'on') ? 'Activer auto-update' : 'Désactiver auto-update';
+        $url = wp_nonce_url(
+            add_query_arg(
+                array(
+                    'action' => 'azsa_toggle_auto_update',
+                    'mode' => $mode,
+                ),
+                admin_url('plugins.php')
+            ),
+            'azsa_toggle_auto_update'
+        );
+        $links[] = '<a href="' . esc_url($url) . '">' . esc_html($label) . '</a>';
+        return $links;
+    }
+
+    public static function handle_plugin_row_auto_update_toggle() {
+        if (!is_admin() || !current_user_can('manage_options')) {
+            return;
+        }
+        if (empty($_GET['action']) || (string) $_GET['action'] !== 'azsa_toggle_auto_update') {
+            return;
+        }
+        if (!isset($_GET['_wpnonce']) || !wp_verify_nonce((string) $_GET['_wpnonce'], 'azsa_toggle_auto_update')) {
+            return;
+        }
+        $mode = sanitize_text_field((string) ($_GET['mode'] ?? ''));
+        if ($mode === 'on') {
+            self::set_auto_updates_enabled(true);
+        } elseif ($mode === 'off') {
+            self::set_auto_updates_enabled(false);
+        }
+        delete_site_transient('update_plugins');
+        wp_safe_redirect(admin_url('plugins.php'));
+        exit;
     }
 
     public static function rest_chat(WP_REST_Request $request) {
