@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.6.0
+ * Version: 2.6.1
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.6.0';
+    const VERSION = '2.6.1';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -170,11 +170,61 @@ final class AZSA_Plugin {
             return;
         }
 
+        if (isset($_POST['azsa_check_updates']) && check_admin_referer('azsa_check_updates_now', 'azsa_check_updates_nonce')) {
+            $settings = self::get_settings();
+            $repo = isset($settings['github_repo']) ? (string) $settings['github_repo'] : '';
+            delete_site_transient('update_plugins');
+            if ($repo !== '') {
+                delete_transient('azsa_gh_release_' . md5($repo));
+            }
+            if (function_exists('wp_clean_plugins_cache')) {
+                wp_clean_plugins_cache(true);
+            }
+            if (function_exists('wp_update_plugins')) {
+                wp_update_plugins();
+            }
+            self::get_latest_github_release($settings, true);
+            echo '<div class="notice notice-success"><p>Vérification des mises à jour effectuée.</p></div>';
+        }
+        if (isset($_POST['azsa_enable_auto_updates']) && check_admin_referer('azsa_toggle_auto_updates', 'azsa_toggle_auto_updates_nonce')) {
+            self::set_auto_updates_enabled(true);
+            echo '<div class="notice notice-success"><p>Mises à jour automatiques activées.</p></div>';
+        }
+        if (isset($_POST['azsa_disable_auto_updates']) && check_admin_referer('azsa_toggle_auto_updates', 'azsa_toggle_auto_updates_nonce')) {
+            self::set_auto_updates_enabled(false);
+            echo '<div class="notice notice-success"><p>Mises à jour automatiques désactivées.</p></div>';
+        }
+
         $settings = self::get_settings();
+        $release = self::get_latest_github_release($settings, false);
+        $latest = is_array($release) && !empty($release['version']) ? (string) $release['version'] : 'indisponible';
+        $auto_enabled = self::is_auto_updates_enabled();
+        $has_new = is_array($release) && !empty($release['version']) && version_compare((string) $release['version'], self::VERSION, '>');
         ?>
         <div class="wrap">
             <h1>Chatbot Mon Assistant IA</h1>
             <p>Configurez uniquement la connexion au calendrier pour les RDV.</p>
+            <p>
+                <strong>Version installée:</strong> <?php echo esc_html(self::VERSION); ?> |
+                <strong>Dernière version:</strong> <?php echo esc_html($latest); ?> |
+                <strong>Auto-update:</strong> <?php echo $auto_enabled ? 'Activé' : 'Désactivé'; ?>
+                <?php if ($has_new): ?>
+                    <span style="color:#0a7f33;font-weight:700;"> | Mise à jour disponible</span>
+                <?php endif; ?>
+            </p>
+
+            <form method="post" style="margin: 0 0 14px;">
+                <?php wp_nonce_field('azsa_check_updates_now', 'azsa_check_updates_nonce'); ?>
+                <button type="submit" name="azsa_check_updates" class="button">Vérifier les mises à jour maintenant</button>
+            </form>
+            <form method="post" style="margin: 0 0 22px;">
+                <?php wp_nonce_field('azsa_toggle_auto_updates', 'azsa_toggle_auto_updates_nonce'); ?>
+                <?php if ($auto_enabled): ?>
+                    <button type="submit" name="azsa_disable_auto_updates" class="button">Désactiver les mises à jour automatiques</button>
+                <?php else: ?>
+                    <button type="submit" name="azsa_enable_auto_updates" class="button button-primary">Activer les mises à jour automatiques</button>
+                <?php endif; ?>
+            </form>
 
             <form method="post" action="options.php">
                 <?php settings_fields('azsa_settings_group'); ?>
