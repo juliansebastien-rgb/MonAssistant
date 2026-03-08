@@ -124,6 +124,10 @@
       (items || []).forEach(function (label) {
         var chip = createEl('button', { class: 'azsa-chip', type: 'button' });
         chip.textContent = label;
+        var low = (label || '').toString().toLowerCase();
+        if (low.indexOf('rdv') !== -1 || low.indexOf('rendez') !== -1) {
+          chip.classList.add('azsa-chip-rdv');
+        }
         chip.addEventListener('click', function () {
           input.value = label;
           form.dispatchEvent(new Event('submit', { cancelable: true }));

@@ -169,6 +169,12 @@
   padding: 6px 10px;
   cursor: pointer;
 }
+.azsa-chip-rdv {
+  background: #ffd84d;
+  border-color: #e5a900;
+  color: #4a2b00;
+  font-weight: 800;
+}
 
 .azsa-input {
   padding: 10px;
