@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.8.3
+ * Version: 2.8.4
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.8.3';
+    const VERSION = '2.8.4';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -597,9 +597,8 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         }
         self::process_lead_actions();
         $all_leads = self::get_leads();
-        $leads = array_values(array_filter($all_leads, function ($l) {
-            return !self::is_rdv_lead($l);
-        }));
+        // "Prospects" acts as a full leads view (including leads that also have a RDV).
+        $leads = array_values($all_leads);
         $filters = self::current_lead_filters();
         $leads = self::filter_leads($leads, $filters);
         echo '<div class="wrap"><h1>Liste des prospects</h1>';
