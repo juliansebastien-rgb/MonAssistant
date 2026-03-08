@@ -18,6 +18,9 @@
     var root = createEl('div', { id: 'azsa-root' });
     var panel = createEl('section', { id: 'azsa-panel', 'aria-label': 'Assistant Chatbot Mon Assistant IA' });
     var toggle = createEl('button', { id: 'azsa-toggle', type: 'button', 'aria-label': 'Ouvrir l\'assistant' });
+    var nudge = createEl('div', { id: 'azsa-nudge', role: 'status', 'aria-live': 'polite' },
+      '<button type="button" aria-label="Fermer">×</button>Je peux vous aider pendant la visite de notre site et vous proposer un RDV téléphonique avec un de nos conseillers.'
+    );
 
     if (cfg.logoUrl) {
       var img = createEl('img', { src: cfg.logoUrl, alt: 'Logo assistant' });
@@ -56,6 +59,7 @@
     panel.appendChild(form);
 
     root.appendChild(panel);
+    root.appendChild(nudge);
     root.appendChild(toggle);
     document.body.appendChild(root);
 
@@ -67,6 +71,9 @@
     var keepListening = false;
     var currentAudio = null;
     var selectedVoice = null;
+    var nudgeTimer = null;
+    var nudgeHideTimer = null;
+    var nudgePausedUntil = 0;
     var userQuestionCount = 0;
     var transcript = [];
     var lead = {
@@ -122,6 +129,28 @@
     function closePanel() {
       panel.classList.remove('azsa-open');
       opened = false;
+    }
+
+    function hideNudge() {
+      nudge.classList.remove('azsa-show');
+      if (nudgeHideTimer) clearTimeout(nudgeHideTimer);
+      nudgeHideTimer = null;
+    }
+
+    function showNudge() {
+      var now = Date.now();
+      if (opened || busy || now < nudgePausedUntil) return;
+      nudge.classList.add('azsa-show');
+      if (nudgeHideTimer) clearTimeout(nudgeHideTimer);
+      nudgeHideTimer = setTimeout(hideNudge, 6500);
+    }
+
+    function scheduleNudge() {
+      if (nudgeTimer) clearInterval(nudgeTimer);
+      nudgeTimer = setInterval(function () {
+        showNudge();
+      }, 45000);
+      setTimeout(showNudge, 9000);
     }
 
     function setVoiceMode(on) {
@@ -289,8 +318,19 @@
     toggle.addEventListener('click', function () {
       if (opened) closePanel();
       else openPanel();
+      hideNudge();
+      nudgePausedUntil = Date.now() + 30000;
     });
     close.addEventListener('click', closePanel);
+    nudge.querySelector('button').addEventListener('click', function () {
+      hideNudge();
+      nudgePausedUntil = Date.now() + 90000;
+    });
+    nudge.addEventListener('click', function () {
+      openPanel();
+      hideNudge();
+      nudgePausedUntil = Date.now() + 90000;
+    });
 
     modeBtn.addEventListener('click', function () {
       setVoiceMode(!voiceMode);
@@ -584,6 +624,7 @@
     if (!cfg.hasIndex) {
       setStatus('Index en cours de génération', true);
     }
+    scheduleNudge();
   }
 
   if (document.readyState === 'loading') {

@@ -14,6 +14,39 @@
 #azsa-toggle img { width: 100%; height: 100%; object-fit: contain; background: transparent; }
 #azsa-toggle:hover { transform: translateY(-1px); }
 
+#azsa-nudge {
+  position: absolute;
+  right: 74px;
+  bottom: 10px;
+  max-width: 250px;
+  background: #ffffff;
+  color: #123d64;
+  border: 1px solid rgba(18,61,100,.16);
+  border-radius: 14px;
+  box-shadow: 0 10px 26px rgba(18,61,100,.20);
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 9px 11px;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity .25s ease, transform .25s ease;
+}
+#azsa-nudge.azsa-show {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+#azsa-nudge button {
+  all: unset;
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  cursor: pointer;
+  color: rgba(18,61,100,.65);
+  font-size: 12px;
+}
+
 #azsa-panel {
   position: absolute;
   right: 0;
@@ -141,6 +174,11 @@
 @media (max-width: 760px) {
   #azsa-root { right: 10px; bottom: 10px; }
   #azsa-toggle { width: 58px; height: 58px; }
+  #azsa-nudge {
+    right: 0;
+    bottom: 68px;
+    max-width: min(86vw, 280px);
+  }
   #azsa-panel {
     right: -2px;
     width: min(96vw, 460px);
