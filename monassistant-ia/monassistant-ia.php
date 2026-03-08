@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.8.2
+ * Version: 2.8.3
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.8.2';
+    const VERSION = '2.8.3';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -304,8 +304,23 @@ final class AZSA_Plugin {
     }
 
     public static function get_leads() {
-        $leads = get_option(self::OPTION_LEADS, array());
-        return is_array($leads) ? $leads : array();
+        $raw = get_option(self::OPTION_LEADS, null);
+        if ($raw === null) {
+            // Legacy fallback keys.
+            $legacy_keys = array('azsa_lead', 'azsa_leads_v1', 'monassistant_leads');
+            foreach ($legacy_keys as $k) {
+                $v = get_option($k, null);
+                if ($v !== null) {
+                    $raw = $v;
+                    break;
+                }
+            }
+        }
+        $leads = self::normalize_leads($raw);
+        if (!empty($leads)) {
+            return $leads;
+        }
+        return array();
     }
 
     public static function update_leads($leads) {
@@ -313,6 +328,61 @@ final class AZSA_Plugin {
             $leads = array();
         }
         update_option(self::OPTION_LEADS, $leads, false);
+    }
+
+    public static function normalize_leads($raw) {
+        if (is_string($raw) && $raw !== '') {
+            $json = json_decode($raw, true);
+            if (is_array($json)) {
+                $raw = $json;
+            } elseif (strpos($raw, 'a:') === 0 && function_exists('maybe_unserialize')) {
+                $raw = maybe_unserialize($raw);
+            }
+        }
+        if (!is_array($raw)) {
+            return array();
+        }
+        // If single associative lead, wrap it.
+        if (isset($raw['ref']) || isset($raw['email']) || isset($raw['phone'])) {
+            $raw = array($raw);
+        }
+        $out = array();
+        foreach ($raw as $lead) {
+            if (!is_array($lead)) {
+                continue;
+            }
+            $out[] = array(
+                'ref' => (string) ($lead['ref'] ?? ''),
+                'created_at' => (string) ($lead['created_at'] ?? ''),
+                'first_name' => (string) ($lead['first_name'] ?? ''),
+                'last_name' => (string) ($lead['last_name'] ?? ''),
+                'email' => (string) ($lead['email'] ?? ''),
+                'phone' => (string) ($lead['phone'] ?? ''),
+                'intent' => (string) ($lead['intent'] ?? ''),
+                'wants_rdv' => !empty($lead['wants_rdv']) ? 1 : 0,
+                'transcript' => (string) ($lead['transcript'] ?? ''),
+                'callback_status' => (string) ($lead['callback_status'] ?? ''),
+            );
+        }
+        return $out;
+    }
+
+    public static function is_rdv_lead($lead) {
+        if (!is_array($lead)) {
+            return false;
+        }
+        if (!empty($lead['wants_rdv'])) {
+            return true;
+        }
+        $intent = strtolower(trim((string) ($lead['intent'] ?? '')));
+        if ($intent !== '' && (strpos($intent, 'rdv') !== false || strpos($intent, 'rendez') !== false || strpos($intent, 'appel') !== false)) {
+            return true;
+        }
+        $transcript = strtolower((string) ($lead['transcript'] ?? ''));
+        if ($transcript !== '' && (strpos($transcript, 'rdv') !== false || strpos($transcript, 'rendez-vous') !== false || strpos($transcript, 'téléphonique') !== false || strpos($transcript, 'telephonique') !== false)) {
+            return true;
+        }
+        return false;
     }
 
     public static function process_lead_actions() {
@@ -526,12 +596,15 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             return;
         }
         self::process_lead_actions();
-        $leads = array_values(array_filter(self::get_leads(), function ($l) {
-            return empty($l['wants_rdv']);
+        $all_leads = self::get_leads();
+        $leads = array_values(array_filter($all_leads, function ($l) {
+            return !self::is_rdv_lead($l);
         }));
         $filters = self::current_lead_filters();
         $leads = self::filter_leads($leads, $filters);
         echo '<div class="wrap"><h1>Liste des prospects</h1>';
+        echo '<p><strong>Total base:</strong> ' . (int) count($all_leads) . '</p>';
+        echo '<p><strong>Total affiché:</strong> ' . (int) count($leads) . '</p>';
         self::render_leads_filters_form('azsa-prospects', $filters);
         self::render_leads_table($leads);
         echo '</div>';
@@ -542,12 +615,15 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             return;
         }
         self::process_lead_actions();
-        $leads = array_values(array_filter(self::get_leads(), function ($l) {
-            return !empty($l['wants_rdv']) || (($l['intent'] ?? '') === 'rdv');
+        $all_leads = self::get_leads();
+        $leads = array_values(array_filter($all_leads, function ($l) {
+            return self::is_rdv_lead($l);
         }));
         $filters = self::current_lead_filters();
         $leads = self::filter_leads($leads, $filters);
         echo '<div class="wrap"><h1>Liste des RDV</h1>';
+        echo '<p><strong>Total base:</strong> ' . (int) count($all_leads) . '</p>';
+        echo '<p><strong>Total affiché:</strong> ' . (int) count($leads) . '</p>';
         self::render_leads_filters_form('azsa-rdv', $filters);
         self::render_leads_table($leads);
         echo '</div>';
