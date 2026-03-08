@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.3.9
+ * Version: 2.4.0
  * Author: Azertaf
  */
 
@@ -11,7 +11,8 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.3.9';
+    const VERSION = '2.4.0';
+    const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
     const CRON_HOOK = 'azsa_rebuild_index_cron';
@@ -117,6 +118,7 @@ final class AZSA_Plugin {
             'characterGifUrl' => (string) $settings['character_gif_url'],
             'gifBaseUrl' => (string) $settings['character_gif_base_url'],
             'restUrl' => esc_url_raw(rest_url('azsa/v1/chat')),
+            'leadUrl' => esc_url_raw(rest_url('azsa/v1/lead')),
             'ttsUrl' => esc_url_raw(rest_url('azsa/v1/tts')),
             'nonce' => wp_create_nonce('wp_rest'),
             'hasIndex' => $has_index,
@@ -299,6 +301,11 @@ final class AZSA_Plugin {
             'methods' => 'POST',
             'permission_callback' => '__return_true',
             'callback' => array(__CLASS__, 'rest_tts'),
+        ));
+        register_rest_route('azsa/v1', '/lead', array(
+            'methods' => 'POST',
+            'permission_callback' => '__return_true',
+            'callback' => array(__CLASS__, 'rest_lead'),
         ));
     }
 
@@ -577,6 +584,59 @@ final class AZSA_Plugin {
             'mime' => 'audio/mpeg',
             'audio_b64' => base64_encode($audio),
         ), 200);
+    }
+
+    public static function rest_lead(WP_REST_Request $request) {
+        $email = sanitize_email((string) $request->get_param('email'));
+        $phone = sanitize_text_field((string) $request->get_param('phone'));
+        $transcript = (string) $request->get_param('transcript');
+        $page_url = esc_url_raw((string) $request->get_param('page_url'));
+
+        if ($email === '' || !is_email($email)) {
+            return new WP_REST_Response(array('ok' => false, 'message' => 'Email invalide.'), 400);
+        }
+
+        $phone = preg_replace('/[^0-9+\s().-]/', '', $phone);
+        $transcript = self::smart_trim($transcript, 4000);
+        $ref = 'LEAD-' . gmdate('Ymd-His') . '-' . wp_generate_password(4, false, false);
+
+        $lead = array(
+            'ref' => $ref,
+            'created_at' => gmdate('c'),
+            'email' => $email,
+            'phone' => $phone,
+            'page_url' => $page_url,
+            'transcript' => $transcript,
+        );
+
+        $leads = get_option(self::OPTION_LEADS, array());
+        if (!is_array($leads)) {
+            $leads = array();
+        }
+        array_unshift($leads, $lead);
+        if (count($leads) > 1000) {
+            $leads = array_slice($leads, 0, 1000);
+        }
+        update_option(self::OPTION_LEADS, $leads, false);
+
+        $subject = 'Votre récapitulatif - Chatbot Mon Assistant IA';
+        $body = "Bonjour,\n\n"
+            . "Merci pour votre échange avec notre assistant.\n"
+            . "Référence: {$ref}\n\n"
+            . "Email: {$email}\n"
+            . "Téléphone: " . ($phone !== '' ? $phone : 'Non renseigné') . "\n"
+            . "Page: " . ($page_url !== '' ? $page_url : 'N/A') . "\n\n"
+            . "Récapitulatif de l'échange:\n"
+            . ($transcript !== '' ? $transcript : "Aucun message enregistré.") . "\n\n"
+            . "Nous revenons vers vous si nécessaire.\n";
+
+        wp_mail($email, $subject, $body);
+        $admin_email = get_option('admin_email');
+        if (is_email($admin_email)) {
+            wp_mail($admin_email, '[Lead] ' . $ref . ' - ' . $email, $body);
+        }
+
+        return new WP_REST_Response(array('ok' => true, 'ref' => $ref), 200);
     }
 
     public static function llm_reply($message, $hits, $settings) {

@@ -67,6 +67,14 @@
     var keepListening = false;
     var currentAudio = null;
     var selectedVoice = null;
+    var transcript = [];
+    var lead = {
+      askedAfterFirstReply: false,
+      stage: 'none',
+      wantsRecap: false,
+      email: '',
+      phone: ''
+    };
 
     function setStatus(text, thinking) {
       status.textContent = text;
@@ -82,6 +90,8 @@
       row.appendChild(bubble);
       thread.appendChild(row);
       thread.scrollTop = thread.scrollHeight;
+      transcript.push((role === 'user' ? 'Visiteur' : 'Assistant') + ': ' + (text || ''));
+      if (transcript.length > 40) transcript = transcript.slice(transcript.length - 40);
     }
 
     function renderChips(items) {
@@ -315,6 +325,84 @@
       return data || {};
     }
 
+    async function saveLead() {
+      if (!cfg.leadUrl) return { ok: false };
+      try {
+        var res = await fetch(cfg.leadUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-WP-Nonce': cfg.nonce || ''
+          },
+          body: JSON.stringify({
+            email: lead.email,
+            phone: lead.phone,
+            page_url: window.location.href,
+            transcript: transcript.join('\n')
+          })
+        });
+        return await res.json();
+      } catch (e) {
+        return { ok: false };
+      }
+    }
+
+    function isEmail(v) {
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || '').trim());
+    }
+
+    async function handleLeadFlow(rawText) {
+      var text = (rawText || '').trim();
+      var normalized = text.toLowerCase();
+      if (lead.stage === 'ask_optin') {
+        if (/(^|\\s)(oui|ok|d accord|volontiers|avec plaisir)(\\s|$)/i.test(normalized)) {
+          lead.wantsRecap = true;
+          lead.stage = 'ask_email';
+          push('bot', "Parfait. Quelle est votre adresse e-mail pour recevoir le récapitulatif ?");
+          renderChips([]);
+          return true;
+        }
+        if (/(^|\\s)(non|pas maintenant|plus tard|no)(\\s|$)/i.test(normalized)) {
+          lead.stage = 'done';
+          push('bot', "Très bien. On continue sans fiche contact. Posez votre prochaine question quand vous voulez.");
+          return true;
+        }
+        push('bot', "Souhaitez-vous recevoir un récapitulatif par e-mail ? Répondez par Oui ou Non.");
+        return true;
+      }
+
+      if (lead.stage === 'ask_email') {
+        if (!isEmail(text)) {
+          push('bot', "Je n'ai pas reconnu un e-mail valide. Pouvez-vous réessayer ?");
+          return true;
+        }
+        lead.email = text;
+        lead.stage = 'ask_phone';
+        push('bot', "Merci. Quel est votre numéro de téléphone ? (ou tapez \"Passer\")");
+        return true;
+      }
+
+      if (lead.stage === 'ask_phone') {
+        if (/^passer$/i.test(text)) {
+          lead.phone = '';
+        } else {
+          lead.phone = text;
+        }
+        lead.stage = 'saving';
+        setStatus('Création de votre fiche...', true);
+        var saved = await saveLead();
+        if (saved && saved.ok) {
+          push('bot', "C'est enregistré. Votre fiche est créée et le récapitulatif a été envoyé par e-mail.");
+        } else {
+          push('bot', "Je n'ai pas pu finaliser l'envoi du récapitulatif pour le moment, mais vous pouvez continuer la conversation.");
+        }
+        lead.stage = 'done';
+        setStatus('Prêt', false);
+        return true;
+      }
+      return false;
+    }
+
     form.addEventListener('submit', async function (e) {
       e.preventDefault();
       if (busy) return;
@@ -329,6 +417,12 @@
       if (voiceMode) stopListening();
 
       try {
+        var leadHandled = await handleLeadFlow(text);
+        if (leadHandled) {
+          setStatus('Prêt', false);
+          return;
+        }
+
         var data = await ask(text);
         var reply = data.reply || 'Je n\'ai pas pu répondre pour le moment.';
         push('bot', reply);
@@ -348,6 +442,14 @@
         if (voiceMode) {
           await speak(reply);
         }
+
+        if (!lead.askedAfterFirstReply) {
+          lead.askedAfterFirstReply = true;
+          lead.stage = 'ask_optin';
+          push('bot', "Souhaitez-vous que je crée une fiche et vous envoie un récapitulatif par e-mail ? J'aurai juste besoin de votre e-mail et téléphone.");
+          renderChips(['Oui', 'Non merci']);
+        }
+
         setMood('success');
         setTimeout(function () { if (!busy && !listening) setMood('idle'); }, 650);
         setStatus('Réponse prête', false);
