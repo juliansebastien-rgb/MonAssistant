@@ -476,9 +476,9 @@
           lead.intent = 'rdv';
           if (openBooking()) {
             openPanel();
-            push('bot', "Parfait. Le calendrier s'affiche à gauche. Choisissez un créneau puis je finalise votre fiche.");
+            push('bot', "Parfait. Le calendrier s'affiche à gauche. Choisissez un créneau puis cliquez sur \"J ai reserve\".");
             renderChips(['J ai reserve', 'Fermer calendrier']);
-            lead.stage = 'ask_name';
+            lead.stage = 'await_booking';
             return true;
           }
           if (lead.firstName && lead.lastName && lead.email && lead.phone) {
@@ -524,6 +524,37 @@
           return true;
         }
         push('bot', "Souhaitez-vous recevoir un récapitulatif par e-mail ? Répondez par Oui ou Non.");
+        return true;
+      }
+
+      if (lead.stage === 'await_booking') {
+        if (/^j ai reserve$/i.test(normalized) || /^j'ai reserve$/i.test(normalized) || /^jai reserve$/i.test(normalized)) {
+          lead.stage = 'ask_phone_after_booking';
+          push('bot', "Super. Souhaitez-vous laisser un numéro de téléphone pour faciliter le rappel ? (ou tapez \"Passer\")");
+          renderChips(['Passer']);
+          return true;
+        }
+        push('bot', "Dès que votre créneau est choisi dans le calendrier, cliquez sur \"J ai reserve\".");
+        return true;
+      }
+
+      if (lead.stage === 'ask_phone_after_booking') {
+        if (/^passer$/i.test(text)) {
+          lead.phone = '';
+        } else {
+          lead.phone = text;
+        }
+        lead.stage = 'saving';
+        setStatus('Finalisation de votre demande...', true);
+        var savedBooked = await saveLead();
+        if (savedBooked && savedBooked.ok) {
+          push('bot', "Parfait, votre demande est enregistrée. Notre équipe vous recontactera si nécessaire.");
+        } else {
+          push('bot', "Je n'ai pas pu finaliser l'enregistrement pour le moment. Vous pouvez continuer la conversation.");
+        }
+        lead.stage = 'done';
+        closeBooking();
+        setStatus('Prêt', false);
         return true;
       }
 

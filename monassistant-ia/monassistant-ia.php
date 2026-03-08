@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.5.0
+ * Version: 2.5.1
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.5.0';
+    const VERSION = '2.5.1';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -678,8 +678,11 @@ final class AZSA_Plugin {
         $intent = sanitize_text_field((string) $request->get_param('intent'));
         $wants_rdv = (bool) $request->get_param('wants_rdv');
 
-        if ($email === '' || !is_email($email)) {
+        if (($email === '' || !is_email($email)) && !$wants_rdv) {
             return new WP_REST_Response(array('ok' => false, 'message' => 'Email invalide.'), 400);
+        }
+        if (!is_email($email)) {
+            $email = '';
         }
 
         $phone = preg_replace('/[^0-9+\s().-]/', '', $phone);
@@ -739,7 +742,9 @@ final class AZSA_Plugin {
             'page_url' => $page_url,
             'transcript' => $transcript,
         ));
-        self::send_html_mail($email, $subject, $customer_html, $customer_text);
+        if ($email !== '') {
+            self::send_html_mail($email, $subject, $customer_html, $customer_text);
+        }
 
         $admin_email = get_option('admin_email');
         if (is_email($admin_email)) {
