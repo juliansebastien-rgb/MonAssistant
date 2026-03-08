@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.4.3
+ * Version: 2.4.4
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.4.3';
+    const VERSION = '2.4.4';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -30,6 +30,7 @@ final class AZSA_Plugin {
         add_action(self::CRON_HOOK, array(__CLASS__, 'rebuild_index'));
         add_filter('pre_set_site_transient_update_plugins', array(__CLASS__, 'check_for_updates'));
         add_filter('plugins_api', array(__CLASS__, 'plugin_info_popup'), 10, 3);
+        add_filter('plugins_auto_update_enabled', '__return_true');
         add_action('upgrader_process_complete', array(__CLASS__, 'clear_update_cache'), 10, 2);
 
         register_activation_hook(__FILE__, array(__CLASS__, 'activate'));
@@ -203,16 +204,26 @@ final class AZSA_Plugin {
             self::get_latest_github_release($settings, true);
             echo '<div class="notice notice-success"><p>Vérification des mises à jour effectuée.</p></div>';
         }
+        if (isset($_POST['azsa_enable_auto_updates']) && check_admin_referer('azsa_toggle_auto_updates', 'azsa_toggle_auto_updates_nonce')) {
+            self::set_auto_updates_enabled(true);
+            echo '<div class="notice notice-success"><p>Mises à jour automatiques activées pour ce plugin.</p></div>';
+        }
+        if (isset($_POST['azsa_disable_auto_updates']) && check_admin_referer('azsa_toggle_auto_updates', 'azsa_toggle_auto_updates_nonce')) {
+            self::set_auto_updates_enabled(false);
+            echo '<div class="notice notice-success"><p>Mises à jour automatiques désactivées pour ce plugin.</p></div>';
+        }
 
         $settings = self::get_settings();
         $index = get_option(self::OPTION_INDEX, array());
         $count = isset($index['docs']) && is_array($index['docs']) ? count($index['docs']) : 0;
         $generated = !empty($index['generated_at']) ? esc_html($index['generated_at']) : 'jamais';
+        $auto_enabled = self::is_auto_updates_enabled();
         ?>
         <div class="wrap">
             <h1>Chatbot Mon Assistant IA</h1>
             <p>Le plugin explore le site, indexe les pages et répond aux visiteurs dans un widget contextuel.</p>
             <p><strong>Index:</strong> <?php echo (int) $count; ?> pages | <strong>Dernière génération:</strong> <?php echo $generated; ?></p>
+            <p><strong>Mises à jour automatiques:</strong> <?php echo $auto_enabled ? 'Activées' : 'Désactivées'; ?></p>
 
             <form method="post" style="margin: 18px 0 28px;">
                 <?php wp_nonce_field('azsa_reindex_now', 'azsa_reindex_nonce'); ?>
@@ -221,6 +232,14 @@ final class AZSA_Plugin {
             <form method="post" style="margin: 0 0 28px;">
                 <?php wp_nonce_field('azsa_check_updates_now', 'azsa_check_updates_nonce'); ?>
                 <button type="submit" name="azsa_check_updates" class="button">Vérifier les mises à jour maintenant</button>
+            </form>
+            <form method="post" style="margin: 0 0 28px;">
+                <?php wp_nonce_field('azsa_toggle_auto_updates', 'azsa_toggle_auto_updates_nonce'); ?>
+                <?php if ($auto_enabled): ?>
+                    <button type="submit" name="azsa_disable_auto_updates" class="button">Désactiver les mises à jour automatiques</button>
+                <?php else: ?>
+                    <button type="submit" name="azsa_enable_auto_updates" class="button button-primary">Activer les mises à jour automatiques</button>
+                <?php endif; ?>
             </form>
 
             <form method="post" action="options.php">
@@ -502,6 +521,33 @@ final class AZSA_Plugin {
         if ($repo !== '') {
             delete_transient('azsa_gh_release_' . md5($repo));
         }
+    }
+
+    public static function is_auto_updates_enabled() {
+        $plugin_file = plugin_basename(__FILE__);
+        $list = get_site_option('auto_update_plugins', array());
+        if (!is_array($list)) {
+            $list = array();
+        }
+        return in_array($plugin_file, $list, true);
+    }
+
+    public static function set_auto_updates_enabled($enabled) {
+        $plugin_file = plugin_basename(__FILE__);
+        $list = get_site_option('auto_update_plugins', array());
+        if (!is_array($list)) {
+            $list = array();
+        }
+        if ($enabled) {
+            if (!in_array($plugin_file, $list, true)) {
+                $list[] = $plugin_file;
+            }
+        } else {
+            $list = array_values(array_filter($list, function ($p) use ($plugin_file) {
+                return (string) $p !== (string) $plugin_file;
+            }));
+        }
+        update_site_option('auto_update_plugins', $list);
     }
 
     public static function rest_chat(WP_REST_Request $request) {
