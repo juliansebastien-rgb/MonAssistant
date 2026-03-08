@@ -93,6 +93,7 @@
       stage: 'none',
       wantsRecap: false,
       wantsRdv: false,
+      rdvDetected: false,
       firstName: '',
       lastName: '',
       email: '',
@@ -508,6 +509,12 @@
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v || '').trim());
     }
 
+    function looksLikePhone(v) {
+      var txt = (v || '').toString().trim();
+      var digits = txt.replace(/\D/g, '');
+      return digits.length >= 8;
+    }
+
     function looksLikeYes(v) {
       return /(^|\s)(oui|ok|d accord|volontiers|avec plaisir|oui rdv|rdv telephonique)(\s|$)/i.test(v || '');
     }
@@ -536,6 +543,22 @@
     async function handleLeadFlow(rawText) {
       var text = (rawText || '').trim();
       var normalized = text.toLowerCase();
+
+      // Fallback: after RDV detection, accept phone even if stage drifted.
+      if (lead.intent === 'rdv' && lead.rdvDetected && !lead.phone && looksLikePhone(text) && (lead.stage === 'ask_phone_after_booking' || lead.stage === 'done' || lead.stage === 'none')) {
+        lead.phone = text;
+        lead.stage = 'saving';
+        setStatus('Finalisation de votre demande...', true);
+        var savedRdvPhone = await saveLead();
+        if (savedRdvPhone && savedRdvPhone.ok) {
+          push('bot', "Parfait, votre téléphone est enregistré et votre fiche lead est finalisée.");
+        } else {
+          push('bot', "Je n'ai pas pu enregistrer votre téléphone pour le moment. Vous pouvez réessayer.");
+        }
+        lead.stage = 'done';
+        setStatus('Prêt', false);
+        return true;
+      }
       if (/^fermer calendrier$/i.test(text)) {
         closeBooking();
         push('bot', "Calendrier fermé. On continue dans le chat.");
@@ -687,6 +710,7 @@
       setStatus('Récupération du RDV...', true);
       lead.wantsRdv = true;
       lead.intent = 'rdv';
+      lead.rdvDetected = true;
 
       var info = (payload && payload.pre_resolved) ? payload.pre_resolved : await resolveCalendly(payload || {});
       closeBooking();
