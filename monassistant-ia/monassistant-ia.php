@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.5.2
+ * Version: 2.6.0
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.5.2';
+    const VERSION = '2.6.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -53,6 +53,7 @@ final class AZSA_Plugin {
             'elevenlabs_speed' => '1.00',
             'calendar_provider' => 'none',
             'calendly_url' => '',
+            'calendly_pat' => '',
             'github_repo' => self::DEFAULT_GITHUB_REPO,
             'github_token' => self::DEFAULT_GITHUB_TOKEN,
         );
@@ -121,6 +122,7 @@ final class AZSA_Plugin {
             'gifBaseUrl' => (string) $settings['character_gif_base_url'],
             'restUrl' => esc_url_raw(rest_url('azsa/v1/chat')),
             'leadUrl' => esc_url_raw(rest_url('azsa/v1/lead')),
+            'calendlyResolveUrl' => esc_url_raw(rest_url('azsa/v1/calendly/resolve')),
             'ttsUrl' => esc_url_raw(rest_url('azsa/v1/tts')),
             'calendarProvider' => (string) ($settings['calendar_provider'] ?? 'none'),
             'calendlyUrl' => esc_url_raw((string) ($settings['calendly_url'] ?? '')),
@@ -155,6 +157,9 @@ final class AZSA_Plugin {
         }
         if (isset($input['calendly_url'])) {
             $out['calendly_url'] = esc_url_raw((string) $input['calendly_url']);
+        }
+        if (isset($input['calendly_pat'])) {
+            $out['calendly_pat'] = sanitize_text_field((string) $input['calendly_pat']);
         }
         $out['github_repo'] = self::DEFAULT_GITHUB_REPO;
         return wp_parse_args($out, self::defaults());
@@ -191,6 +196,13 @@ final class AZSA_Plugin {
                             <p class="description">URL de prise de RDV publique Calendly (embed).</p>
                         </td>
                     </tr>
+                    <tr>
+                        <th scope="row"><label for="azsa_calendly_pat">Calendly PAT</label></th>
+                        <td>
+                            <input id="azsa_calendly_pat" name="<?php echo self::OPTION_SETTINGS; ?>[calendly_pat]" type="password" class="regular-text" value="<?php echo esc_attr($settings['calendly_pat'] ?? ''); ?>" autocomplete="off" />
+                            <p class="description">Token personnel Calendly (Personal Access Token) pour récupérer nom, prénom, email et créneau du RDV.</p>
+                        </td>
+                    </tr>
                 </table>
                 <?php submit_button('Enregistrer'); ?>
             </form>
@@ -214,6 +226,77 @@ final class AZSA_Plugin {
             'permission_callback' => '__return_true',
             'callback' => array(__CLASS__, 'rest_lead'),
         ));
+        register_rest_route('azsa/v1', '/calendly/resolve', array(
+            'methods' => 'POST',
+            'permission_callback' => '__return_true',
+            'callback' => array(__CLASS__, 'rest_calendly_resolve'),
+        ));
+    }
+
+    public static function rest_calendly_resolve(WP_REST_Request $request) {
+        $settings = self::get_settings();
+        $token = trim((string) ($settings['calendly_pat'] ?? ''));
+        if ($token === '') {
+            return new WP_REST_Response(array('ok' => false, 'message' => 'Calendly PAT manquant.'), 400);
+        }
+
+        $invitee_uri = esc_url_raw((string) $request->get_param('invitee_uri'));
+        $event_uri = esc_url_raw((string) $request->get_param('event_uri'));
+        if ($invitee_uri === '' && $event_uri === '') {
+            return new WP_REST_Response(array('ok' => false, 'message' => 'Données Calendly manquantes.'), 400);
+        }
+
+        $headers = array(
+            'Authorization' => 'Bearer ' . $token,
+            'Accept' => 'application/json',
+            'Content-Type' => 'application/json',
+            'Calendly-Version' => '2020-08-01',
+        );
+
+        $invitee = array();
+        if ($invitee_uri !== '') {
+            $res = wp_remote_get($invitee_uri, array('timeout' => 20, 'headers' => $headers));
+            if (!is_wp_error($res) && (int) wp_remote_retrieve_response_code($res) < 300) {
+                $body = json_decode((string) wp_remote_retrieve_body($res), true);
+                if (is_array($body) && !empty($body['resource']) && is_array($body['resource'])) {
+                    $invitee = $body['resource'];
+                }
+            }
+        }
+
+        $event = array();
+        if ($event_uri !== '') {
+            $res2 = wp_remote_get($event_uri, array('timeout' => 20, 'headers' => $headers));
+            if (!is_wp_error($res2) && (int) wp_remote_retrieve_response_code($res2) < 300) {
+                $body2 = json_decode((string) wp_remote_retrieve_body($res2), true);
+                if (is_array($body2) && !empty($body2['resource']) && is_array($body2['resource'])) {
+                    $event = $body2['resource'];
+                }
+            }
+        }
+
+        $name = trim((string) ($invitee['name'] ?? ''));
+        $first_name = '';
+        $last_name = '';
+        if ($name !== '') {
+            $parts = preg_split('/\s+/', $name);
+            if (!empty($parts)) {
+                $first_name = array_shift($parts);
+                $last_name = implode(' ', $parts);
+            }
+        }
+
+        return new WP_REST_Response(array(
+            'ok' => true,
+            'first_name' => $first_name,
+            'last_name' => $last_name,
+            'name' => $name,
+            'email' => (string) ($invitee['email'] ?? ''),
+            'phone' => (string) ($invitee['text_reminder_number'] ?? ''),
+            'event_start' => (string) ($event['start_time'] ?? ''),
+            'event_end' => (string) ($event['end_time'] ?? ''),
+            'event_name' => (string) ($event['name'] ?? ''),
+        ), 200);
     }
 
     public static function get_latest_github_release($settings = array(), $force = false) {

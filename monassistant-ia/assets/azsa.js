@@ -362,6 +362,14 @@
       hideNudge();
       nudgePausedUntil = Date.now() + 90000;
     });
+    window.addEventListener('message', function (e) {
+      if (!e || !e.data) return;
+      var data = e.data;
+      var evt = data.event || data.event_name || '';
+      if (evt === 'calendly.event_scheduled') {
+        onCalendlyScheduled(data.payload || {});
+      }
+    });
 
     modeBtn.addEventListener('click', function () {
       setVoiceMode(!voiceMode);
@@ -420,6 +428,34 @@
             wants_rdv: !!lead.wantsRdv,
             page_url: window.location.href,
             transcript: transcript.join('\n')
+          })
+        });
+        return await res.json();
+      } catch (e) {
+        return { ok: false };
+      }
+    }
+
+    async function resolveCalendly(payload) {
+      if (!cfg.calendlyResolveUrl) return { ok: false };
+      var inviteeUri = '';
+      var eventUri = '';
+      if (payload) {
+        if (payload.invitee && payload.invitee.uri) inviteeUri = payload.invitee.uri;
+        if (payload.event && payload.event.uri) eventUri = payload.event.uri;
+        if (!inviteeUri && payload.invitee_uri) inviteeUri = payload.invitee_uri;
+        if (!eventUri && payload.event_uri) eventUri = payload.event_uri;
+      }
+      try {
+        var res = await fetch(cfg.calendlyResolveUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-WP-Nonce': cfg.nonce || ''
+          },
+          body: JSON.stringify({
+            invitee_uri: inviteeUri,
+            event_uri: eventUri
           })
         });
         return await res.json();
@@ -610,6 +646,48 @@
         return true;
       }
       return false;
+    }
+
+    async function onCalendlyScheduled(payload) {
+      if (lead.stage !== 'await_booking' && lead.stage !== 'ask_rdv') return;
+      setStatus('Récupération du RDV...', true);
+      lead.wantsRdv = true;
+      lead.intent = 'rdv';
+
+      var info = await resolveCalendly(payload || {});
+      closeBooking();
+
+      if (info && info.ok) {
+        if (info.first_name) lead.firstName = info.first_name;
+        if (info.last_name) lead.lastName = info.last_name;
+        if (info.email) lead.email = info.email;
+        if (info.phone) lead.phone = info.phone;
+        var rdvText = "Parfait, votre RDV est confirmé";
+        if (info.event_start) rdvText += " le " + info.event_start;
+        rdvText += ".";
+        push('bot', rdvText);
+        if (lead.firstName || lead.lastName || lead.email) {
+          push('bot', "Infos récupérées: " + [lead.firstName, lead.lastName, lead.email].filter(Boolean).join(' | '));
+        }
+      } else {
+        push('bot', "RDV détecté. Je n'ai pas pu récupérer automatiquement nom, prénom et email depuis Calendly.");
+      }
+
+      if (lead.phone) {
+        lead.stage = 'saving';
+        var savedDirect = await saveLead();
+        if (savedDirect && savedDirect.ok) {
+          push('bot', "Votre fiche lead est enregistrée. Merci.");
+        } else {
+          push('bot', "Je n'ai pas pu enregistrer la fiche pour le moment.");
+        }
+        lead.stage = 'done';
+      } else {
+        lead.stage = 'ask_phone_after_booking';
+        push('bot', "Pouvez-vous ajouter votre téléphone pour finaliser votre fiche ? (ou tapez \"Passer\")");
+        renderChips(['Passer']);
+      }
+      setStatus('Prêt', false);
     }
 
     form.addEventListener('submit', async function (e) {
