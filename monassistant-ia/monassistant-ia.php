@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.7.2
+ * Version: 2.8.0
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.7.2';
+    const VERSION = '2.8.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_INDEX = 'azsa_index';
@@ -123,6 +123,7 @@ final class AZSA_Plugin {
             'restUrl' => esc_url_raw(rest_url('azsa/v1/chat')),
             'leadUrl' => esc_url_raw(rest_url('azsa/v1/lead')),
             'calendlyResolveUrl' => esc_url_raw(rest_url('azsa/v1/calendly/resolve')),
+            'calendlyPollUrl' => esc_url_raw(rest_url('azsa/v1/calendly/poll')),
             'ttsUrl' => esc_url_raw(rest_url('azsa/v1/tts')),
             'calendarProvider' => (string) ($settings['calendar_provider'] ?? 'none'),
             'calendlyUrl' => esc_url_raw((string) ($settings['calendly_url'] ?? '')),
@@ -281,6 +282,11 @@ final class AZSA_Plugin {
             'permission_callback' => '__return_true',
             'callback' => array(__CLASS__, 'rest_calendly_resolve'),
         ));
+        register_rest_route('azsa/v1', '/calendly/poll', array(
+            'methods' => 'POST',
+            'permission_callback' => '__return_true',
+            'callback' => array(__CLASS__, 'rest_calendly_poll'),
+        ));
     }
 
     public static function rest_calendly_resolve(WP_REST_Request $request) {
@@ -347,6 +353,84 @@ final class AZSA_Plugin {
             'event_end' => (string) ($event['end_time'] ?? ''),
             'event_name' => (string) ($event['name'] ?? ''),
         ), 200);
+    }
+
+    public static function calendly_api_get($url, $token, $timeout = 20) {
+        $res = wp_remote_get($url, array(
+            'timeout' => $timeout,
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $token,
+                'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
+                'Calendly-Version' => '2020-08-01',
+            ),
+        ));
+        if (is_wp_error($res) || (int) wp_remote_retrieve_response_code($res) >= 300) {
+            return array();
+        }
+        $body = json_decode((string) wp_remote_retrieve_body($res), true);
+        return is_array($body) ? $body : array();
+    }
+
+    public static function rest_calendly_poll(WP_REST_Request $request) {
+        $settings = self::get_settings();
+        $token = trim((string) ($settings['calendly_pat'] ?? ''));
+        $session_id = sanitize_text_field((string) $request->get_param('session_id'));
+        if ($token === '' || $session_id === '') {
+            return new WP_REST_Response(array('ok' => false, 'found' => false), 200);
+        }
+
+        $me = self::calendly_api_get('https://api.calendly.com/users/me', $token, 15);
+        $user_uri = (string) (($me['resource']['uri'] ?? ''));
+        if ($user_uri === '') {
+            return new WP_REST_Response(array('ok' => false, 'found' => false), 200);
+        }
+
+        $events_url = 'https://api.calendly.com/scheduled_events?user=' . rawurlencode($user_uri) . '&status=active&sort=start_time:desc&count=10';
+        $events = self::calendly_api_get($events_url, $token, 15);
+        $collection = isset($events['collection']) && is_array($events['collection']) ? $events['collection'] : array();
+        if (empty($collection)) {
+            return new WP_REST_Response(array('ok' => true, 'found' => false), 200);
+        }
+
+        foreach ($collection as $ev) {
+            $ev_uri = (string) ($ev['uri'] ?? '');
+            if ($ev_uri === '') {
+                continue;
+            }
+            $inv_url = 'https://api.calendly.com/scheduled_events/' . rawurlencode(basename($ev_uri)) . '/invitees';
+            $inv = self::calendly_api_get($inv_url, $token, 15);
+            $invites = isset($inv['collection']) && is_array($inv['collection']) ? $inv['collection'] : array();
+            foreach ($invites as $iv) {
+                $tracking = isset($iv['tracking']) && is_array($iv['tracking']) ? $iv['tracking'] : array();
+                $utm_content = (string) ($tracking['utm_content'] ?? '');
+                if ($utm_content !== $session_id) {
+                    continue;
+                }
+                $name = trim((string) ($iv['name'] ?? ''));
+                $parts = $name !== '' ? preg_split('/\s+/', $name) : array();
+                $first = '';
+                $last = '';
+                if (!empty($parts)) {
+                    $first = array_shift($parts);
+                    $last = implode(' ', $parts);
+                }
+                return new WP_REST_Response(array(
+                    'ok' => true,
+                    'found' => true,
+                    'first_name' => $first,
+                    'last_name' => $last,
+                    'name' => $name,
+                    'email' => (string) ($iv['email'] ?? ''),
+                    'phone' => (string) ($iv['text_reminder_number'] ?? ''),
+                    'event_start' => (string) ($ev['start_time'] ?? ''),
+                    'event_end' => (string) ($ev['end_time'] ?? ''),
+                    'event_name' => (string) ($ev['name'] ?? ''),
+                ), 200);
+            }
+        }
+
+        return new WP_REST_Response(array('ok' => true, 'found' => false), 200);
     }
 
     public static function get_latest_github_release($settings = array(), $force = false) {

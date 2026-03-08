@@ -53,13 +53,7 @@
     form.appendChild(send);
 
     var bookingPane = createEl('aside', { class: 'azsa-booking', id: 'azsa-booking' });
-    var bookingActions = createEl('div', { class: 'azsa-booking-actions' });
-    var bookingDoneBtn = createEl('button', { type: 'button', id: 'azsa-booking-done' }, "J'ai reserve");
-    var bookingCloseBtn = createEl('button', { type: 'button', id: 'azsa-booking-close' }, 'Fermer');
     var bookingFrame = createEl('iframe', { id: 'azsa-booking-frame', title: 'Prise de RDV', loading: 'lazy', referrerpolicy: 'strict-origin-when-cross-origin' });
-    bookingActions.appendChild(bookingDoneBtn);
-    bookingActions.appendChild(bookingCloseBtn);
-    bookingPane.appendChild(bookingActions);
     bookingPane.appendChild(bookingFrame);
     var main = createEl('div', { class: 'azsa-main' });
     main.appendChild(head);
@@ -89,6 +83,8 @@
     var nudgeHideTimer = null;
     var nudgePausedUntil = 0;
     var bookingOpen = false;
+    var bookingPollTimer = null;
+    var bookingSessionId = '';
     var userQuestionCount = 0;
     var transcript = [];
     var lead = {
@@ -155,24 +151,49 @@
     function openBooking() {
       var url = getCalendlyUrl();
       if (!url) return false;
-      if (!bookingFrame.getAttribute('src')) {
-        bookingFrame.setAttribute('src', url);
-      }
+      bookingSessionId = 'azsa_' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36);
+      var sep = url.indexOf('?') === -1 ? '?' : '&';
+      var trackedUrl = url + sep + 'utm_content=' + encodeURIComponent(bookingSessionId);
+      bookingFrame.setAttribute('src', trackedUrl);
       panel.classList.add('azsa-with-booking');
       bookingOpen = true;
+      startBookingPolling();
       return true;
+    }
+
+    function startBookingPolling() {
+      stopBookingPolling();
+      if (!cfg.calendlyPollUrl || !bookingSessionId) return;
+      bookingPollTimer = setInterval(async function () {
+        if (!bookingOpen || !bookingSessionId) return;
+        try {
+          var res = await fetch(cfg.calendlyPollUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-WP-Nonce': cfg.nonce || ''
+            },
+            body: JSON.stringify({ session_id: bookingSessionId })
+          });
+          var data = await res.json();
+          if (data && data.ok && data.found) {
+            onCalendlyScheduled({ pre_resolved: data });
+          }
+        } catch (err) {}
+      }, 8000);
+    }
+
+    function stopBookingPolling() {
+      if (bookingPollTimer) {
+        clearInterval(bookingPollTimer);
+        bookingPollTimer = null;
+      }
     }
 
     function closeBooking() {
       panel.classList.remove('azsa-with-booking');
       bookingOpen = false;
-    }
-
-    function finishBookingManual() {
-      closeBooking();
-      lead.stage = 'ask_phone_after_booking';
-      push('bot', "Super. Je prends en compte votre réservation. Souhaitez-vous laisser un numéro de téléphone ? (ou tapez \"Passer\")");
-      renderChips(['Passer']);
+      stopBookingPolling();
     }
 
     function hideNudge() {
@@ -375,12 +396,6 @@
       hideNudge();
       nudgePausedUntil = Date.now() + 90000;
     });
-    bookingDoneBtn.addEventListener('click', function () {
-      finishBookingManual();
-    });
-    bookingCloseBtn.addEventListener('click', function () {
-      closeBooking();
-    });
     window.addEventListener('message', function (e) {
       if (!e || typeof e.data === 'undefined' || e.data === null) return;
       var data = e.data;
@@ -537,8 +552,8 @@
           lead.intent = 'rdv';
           if (openBooking()) {
             openPanel();
-            push('bot', "Parfait. Le calendrier s'affiche à gauche. Choisissez un créneau puis cliquez sur \"J ai reserve\".");
-            renderChips(['J ai reserve', 'Fermer calendrier']);
+            push('bot', "Parfait. Le calendrier s'affiche à gauche. Je détecterai automatiquement votre réservation.");
+            renderChips(['Fermer calendrier']);
             lead.stage = 'await_booking';
             return true;
           }
@@ -589,11 +604,7 @@
       }
 
       if (lead.stage === 'await_booking') {
-        if (/^j ai reserve$/i.test(normalized) || /^j'ai reserve$/i.test(normalized) || /^jai reserve$/i.test(normalized)) {
-          finishBookingManual();
-          return true;
-        }
-        push('bot', "Dès que votre créneau est choisi dans le calendrier, cliquez sur \"J ai reserve\".");
+        push('bot', "Je surveille votre réservation Calendly automatiquement.");
         return true;
       }
 
@@ -677,7 +688,7 @@
       lead.wantsRdv = true;
       lead.intent = 'rdv';
 
-      var info = await resolveCalendly(payload || {});
+      var info = (payload && payload.pre_resolved) ? payload.pre_resolved : await resolveCalendly(payload || {});
       closeBooking();
 
       if (info && info.ok) {
