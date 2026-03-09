@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.1.1
+ * Version: 3.1.2
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.1.1';
+    const VERSION = '3.1.2';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -974,6 +974,40 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         return $events;
     }
 
+    public static function group_timeline_conversations($events, $idle_seconds = 600) {
+        $groups = array();
+        $current = array();
+        $last_ts = 0;
+        $last_ref = '';
+        foreach ((array) $events as $ev) {
+            $ts = strtotime((string) ($ev['created_at'] ?? '')) ?: 0;
+            $ref = sanitize_text_field((string) ($ev['contact_ref'] ?? ''));
+            $start_new = false;
+            if (empty($current)) {
+                $start_new = true;
+            } elseif ($last_ts > 0 && $ts > 0 && ($ts - $last_ts) > $idle_seconds) {
+                $start_new = true;
+            } elseif ($last_ref !== '' && $ref !== '' && $ref !== $last_ref) {
+                $start_new = true;
+            }
+            if ($start_new) {
+                if (!empty($current)) {
+                    $groups[] = $current;
+                }
+                $current = array();
+            }
+            $current[] = $ev;
+            $last_ts = $ts;
+            if ($ref !== '') {
+                $last_ref = $ref;
+            }
+        }
+        if (!empty($current)) {
+            $groups[] = $current;
+        }
+        return $groups;
+    }
+
     public static function render_prospects_page() {
         if (!current_user_can('manage_options')) {
             return;
@@ -1148,21 +1182,40 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             echo '<p>Aucun événement pour ce contact.</p></div>';
             return;
         }
+        $conversations = self::group_timeline_conversations($timeline, 600);
         echo '<div style="display:flex;flex-direction:column;gap:10px;max-width:960px;">';
-        foreach ($timeline as $ev) {
-            $data_text = self::event_data_to_text($ev);
+        $idx = 1;
+        foreach ($conversations as $conv) {
+            $first = $conv[0];
+            $last = $conv[count($conv) - 1];
+            $first_ts = strtotime((string) ($first['created_at'] ?? '')) ?: 0;
+            $last_ts = strtotime((string) ($last['created_at'] ?? '')) ?: 0;
+            $range = ($first_ts && $last_ts)
+                ? (gmdate('d/m/y H:i', $first_ts) . ' → ' . gmdate('H:i', $last_ts))
+                : self::format_date_short((string) ($first['created_at'] ?? ''));
+
             echo '<article style="background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:12px 14px;box-shadow:0 1px 2px rgba(0,0,0,.03);">';
-            echo '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 6px;">';
-            echo '<span style="font-weight:700;color:#123d64;">' . esc_html((string) ($ev['event_type'] ?? '')) . '</span>';
-            echo '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#f0f4f8;color:#29455f;font-size:12px;">' . esc_html((string) ($ev['actor'] ?? '')) . '</span>';
-            echo '<span style="color:#637b93;font-size:12px;">' . esc_html(self::format_date_short((string) ($ev['created_at'] ?? ''))) . '</span>';
-            echo '</div>';
-            if ($data_text !== '') {
-                echo '<div style="color:#1f2f3d;line-height:1.45;">' . esc_html($data_text) . '</div>';
-            } else {
-                echo '<div style="color:#6b7280;line-height:1.45;">Aucun détail complémentaire.</div>';
+            echo '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 8px;">';
+            echo '<div style="font-weight:700;color:#123d64;">Conversation #' . (int) $idx . '</div>';
+            echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+            echo '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#eef6ff;color:#123d64;font-size:12px;">' . esc_html($range) . '</span>';
+            echo '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#f0f4f8;color:#29455f;font-size:12px;">' . (int) count($conv) . ' événements</span>';
+            echo '</div></div>';
+            echo '<div style="display:flex;flex-direction:column;gap:6px;">';
+            foreach ($conv as $ev) {
+                $data_text = self::event_data_to_text($ev);
+                $meta = trim((string) ($ev['actor'] ?? '') . ' · ' . (string) ($ev['event_type'] ?? ''));
+                $when_ts = strtotime((string) ($ev['created_at'] ?? '')) ?: 0;
+                $when = $when_ts ? gmdate('H:i', $when_ts) : self::format_date_short((string) ($ev['created_at'] ?? ''));
+                echo '<div style="border-left:3px solid #dbe7f3;padding:4px 0 4px 8px;">';
+                echo '<div style="font-size:12px;color:#637b93;">' . esc_html($when) . ' · ' . esc_html($meta) . '</div>';
+                if ($data_text !== '') {
+                    echo '<div style="color:#1f2f3d;line-height:1.45;">' . esc_html($data_text) . '</div>';
+                }
+                echo '</div>';
             }
-            echo '</article>';
+            echo '</div></article>';
+            $idx++;
         }
         echo '</div>';
         echo "<script>
