@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.9
+ * Version: 3.7.0
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.9';
+    const VERSION = '3.7.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -3689,6 +3689,22 @@ HTML;
             self::log_event($owner_user_id, 'admin', $important_event_type, array(
                 'message' => self::smart_trim($message, 240),
             ), $session_id, $last_contact_ref);
+        }
+
+        // Apply executable global overrides learned from validated improvements.
+        $forced_action = self::match_global_override_action($message, $settings);
+        if ($forced_action === 'call_contact' && !preg_match('/\\b(appel|appelle|appelles|appeler|appelez|telephone|t[eé]l)\\b/iu', $message)) {
+            $message = trim($message . ' appel');
+            $lower = strtolower($message);
+        } elseif ($forced_action === 'email_contact' && !self::is_email_request_text($message)) {
+            $message = trim($message . ' email');
+            $lower = strtolower($message);
+        } elseif ($forced_action === 'sms_contact' && !self::is_sms_request_text($message)) {
+            $message = trim($message . ' sms');
+            $lower = strtolower($message);
+        } elseif ($forced_action === 'whatsapp_contact' && !self::is_whatsapp_request_text($message)) {
+            $message = trim($message . ' whatsapp');
+            $lower = strtolower($message);
         }
 
         if ($reply === '' && self::is_master_site() && !empty($admin_state['await']) && (string) $admin_state['await'] === 'improve_confirm' && !empty($admin_state['rule_text'])) {
