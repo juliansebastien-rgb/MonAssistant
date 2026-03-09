@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.6
+ * Version: 3.6.7
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.6';
+    const VERSION = '3.6.7';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -1344,6 +1344,24 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         $data = json_decode((string) ($event['data'] ?? '{}'), true);
         if (!is_array($data)) {
             $data = array();
+        }
+        if (in_array($event_type, array('call_outbound', 'call_inbound'), true)) {
+            $parts = array();
+            $phone = trim((string) ($data['phone'] ?? ''));
+            $msg = trim((string) ($data['message'] ?? ''));
+            $report = trim((string) ($data['report'] ?? ''));
+            if ($phone !== '') {
+                $parts[] = 'phone: ' . $phone;
+            }
+            if ($msg !== '') {
+                $parts[] = 'message: ' . self::smart_trim($msg, 240);
+            }
+            if ($report !== '') {
+                $parts[] = 'compte-rendu: ' . self::smart_trim($report, 320);
+            }
+            if (!empty($parts)) {
+                return implode(' | ', $parts);
+            }
         }
         if (in_array($event_type, array('admin_note_added', 'intent_add_note'), true)) {
             $note = trim((string) ($data['note'] ?? ''));
@@ -2965,6 +2983,58 @@ HTML;
         update_option(self::OPTION_EVENTS, $events, false);
     }
 
+    public static function merge_report_into_recent_event($owner_user_id, $session_id, $contact_ref, $target_event_type, $report_text) {
+        $owner_user_id = self::normalize_owner_user_id((int) $owner_user_id);
+        $session_id = self::sanitize_session_id((string) $session_id);
+        $contact_ref = sanitize_text_field((string) $contact_ref);
+        $target_event_type = sanitize_key((string) $target_event_type);
+        $report_text = trim((string) $report_text);
+        if ($target_event_type === '' || $report_text === '') {
+            return false;
+        }
+        $events = self::get_events_raw();
+        $now = time();
+        $updated = false;
+        foreach ($events as $idx => $ev) {
+            if (self::normalize_owner_user_id((int) ($ev['owner_user_id'] ?? 0)) !== $owner_user_id) {
+                continue;
+            }
+            if (sanitize_key((string) ($ev['event_type'] ?? '')) !== $target_event_type) {
+                continue;
+            }
+            if ($session_id !== '' && self::sanitize_session_id((string) ($ev['session_id'] ?? '')) !== $session_id) {
+                continue;
+            }
+            if ($contact_ref !== '' && sanitize_text_field((string) ($ev['contact_ref'] ?? '')) !== $contact_ref) {
+                continue;
+            }
+            $ts = strtotime((string) ($ev['created_at'] ?? '')) ?: 0;
+            if ($ts > 0 && abs($now - $ts) > 1800) {
+                continue;
+            }
+            $data = json_decode((string) ($ev['data'] ?? '{}'), true);
+            if (!is_array($data)) {
+                $data = array();
+            }
+            $existing_report = trim((string) ($data['report'] ?? ''));
+            if ($existing_report === '') {
+                $data['report'] = $report_text;
+            } else {
+                $data['report'] = self::smart_trim($existing_report . ' | ' . $report_text, 900);
+            }
+            $events[$idx]['data'] = wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if (!is_string($events[$idx]['data'])) {
+                $events[$idx]['data'] = '{}';
+            }
+            $updated = true;
+            break;
+        }
+        if ($updated) {
+            update_option(self::OPTION_EVENTS, $events, false);
+        }
+        return $updated;
+    }
+
     public static function get_last_admin_chat_context($owner_user_id) {
         $owner_user_id = self::normalize_owner_user_id($owner_user_id);
         $events = self::get_events_raw();
@@ -3773,9 +3843,13 @@ HTML;
                 self::clear_admin_chat_state($owner_user_id, $session_id);
                 $reply = "D’accord, compte-rendu d’appel ignoré.";
             } else {
-                self::log_event($owner_user_id, 'admin', 'call_report', array(
-                    'report' => self::smart_trim($message, 500),
-                ), $session_id, $target_ref);
+                $report_txt = self::smart_trim($message, 500);
+                $merged = self::merge_report_into_recent_event($owner_user_id, $session_id, $target_ref, 'call_outbound', $report_txt);
+                if (!$merged) {
+                    self::log_event($owner_user_id, 'admin', 'call_report', array(
+                        'report' => $report_txt,
+                    ), $session_id, $target_ref);
+                }
                 self::clear_admin_chat_state($owner_user_id, $session_id);
                 $out_ref = $target_ref;
                 $reply = "Compte-rendu d’appel enregistré sur la fiche " . $target_ref . ".";
