@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.0.8
+ * Version: 3.1.0
  * Author: Azertaf
  */
 
@@ -11,11 +11,12 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.0.8';
+    const VERSION = '3.1.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
     const OPTION_ADMIN_NOTES = 'azsa_admin_notes';
+    const OPTION_ADMIN_CHAT_STATE = 'azsa_admin_chat_state';
     const OPTION_EVENTS = 'azsa_events';
     const OPTION_INDEX = 'azsa_index';
     const CRON_HOOK = 'azsa_rebuild_index_cron';
@@ -250,19 +251,11 @@ final class AZSA_Plugin {
         );
         add_submenu_page(
             'azsa-prospects',
-            'Liste des prospects',
-            'Liste des prospects',
+            'Contacts',
+            'Contacts',
             'manage_options',
             'azsa-prospects',
             array(__CLASS__, 'render_prospects_page')
-        );
-        add_submenu_page(
-            'azsa-prospects',
-            'Liste des RDV',
-            'Liste des RDV',
-            'manage_options',
-            'azsa-rdv',
-            array(__CLASS__, 'render_rdv_page')
         );
         add_submenu_page(
             'azsa-prospects',
@@ -271,6 +264,14 @@ final class AZSA_Plugin {
             'manage_options',
             'azsa-events',
             array(__CLASS__, 'render_events_page')
+        );
+        add_submenu_page(
+            'azsa-prospects',
+            'Fiche contact',
+            'Fiche contact',
+            'manage_options',
+            'azsa-contact',
+            array(__CLASS__, 'render_contact_page')
         );
         add_submenu_page(
             'azsa-prospects',
@@ -544,6 +545,30 @@ final class AZSA_Plugin {
         update_option(self::OPTION_LEADS, $merged, false);
     }
 
+    public static function update_lead_phone($owner_user_id, $contact_ref, $phone) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $contact_ref = sanitize_text_field((string) $contact_ref);
+        $phone = preg_replace('/[^0-9+\s().-]/', '', (string) $phone);
+        if ($contact_ref === '' || trim((string) $phone) === '') {
+            return false;
+        }
+        $leads = self::get_leads($owner_user_id);
+        $changed = false;
+        foreach ($leads as &$lead) {
+            if ((string) ($lead['ref'] ?? '') !== $contact_ref) {
+                continue;
+            }
+            $lead['phone'] = trim((string) $phone);
+            $changed = true;
+            break;
+        }
+        unset($lead);
+        if ($changed) {
+            self::update_leads($leads, $owner_user_id);
+        }
+        return $changed;
+    }
+
     public static function normalize_leads($raw) {
         if (is_string($raw) && $raw !== '') {
             $json = json_decode($raw, true);
@@ -576,6 +601,7 @@ final class AZSA_Plugin {
                 'wants_rdv' => !empty($lead['wants_rdv']) ? 1 : 0,
                 'page_url' => (string) ($lead['page_url'] ?? ''),
                 'transcript' => (string) ($lead['transcript'] ?? ''),
+                'session_id' => self::sanitize_session_id((string) ($lead['session_id'] ?? '')),
                 'callback_status' => (string) ($lead['callback_status'] ?? ''),
                 'owner_user_id' => self::normalize_owner_user_id((int) ($lead['owner_user_id'] ?? 0)),
             );
@@ -815,6 +841,10 @@ final class AZSA_Plugin {
                 'ref' => $ref_raw,
                 '_wpnonce' => $nonce,
             ), admin_url('admin.php'));
+            $view_url = add_query_arg(array(
+                'page' => 'azsa-contact',
+                'ref' => $ref_raw,
+            ), admin_url('admin.php'));
             echo '<tr>';
             echo '<td>' . $ref . '</td><td>' . $date . '</td><td>' . $first . '</td><td>' . $last . '</td><td>' . $email . '</td><td>' . $phone . '</td><td>' . esc_html($demand) . '</td>';
             echo '<td>';
@@ -847,6 +877,7 @@ final class AZSA_Plugin {
             if ($transcript !== '') {
                 echo '<details class="azsa-transcript"><summary class="button button-small" style="cursor:pointer;">Transcript</summary><div class="azsa-transcript-panel">' . $transcript . '</div></details>';
             }
+            echo '<a class="button button-small button-primary" href="' . esc_url($view_url) . '">Voir la fiche</a>';
             echo '<a class="button button-small" style="border-color:#b32d2e;color:#b32d2e;" href="' . esc_url($delete_url) . '" onclick="return confirm(\'Supprimer définitivement cet enregistrement ?\');">Supprimer</a>';
             echo '</div></td>';
             echo '</tr>';
@@ -881,17 +912,75 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         return gmdate('d/m/y', $ts);
     }
 
+    public static function get_contact_by_ref($owner_user_id, $ref) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $ref = sanitize_text_field((string) $ref);
+        if ($ref === '') {
+            return array();
+        }
+        foreach (self::get_leads($owner_user_id) as $lead) {
+            if ((string) ($lead['ref'] ?? '') === $ref) {
+                return $lead;
+            }
+        }
+        return array();
+    }
+
+    public static function event_data_to_text($event) {
+        $data = json_decode((string) ($event['data'] ?? '{}'), true);
+        if (!is_array($data)) {
+            return '';
+        }
+        $parts = array();
+        foreach ($data as $k => $v) {
+            if (is_array($v) || is_object($v)) {
+                continue;
+            }
+            $val = trim((string) $v);
+            if ($val === '') {
+                continue;
+            }
+            $parts[] = $k . ': ' . $val;
+        }
+        return implode(' | ', array_slice($parts, 0, 6));
+    }
+
+    public static function get_contact_timeline($owner_user_id, $lead) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $ref = sanitize_text_field((string) ($lead['ref'] ?? ''));
+        $session_id = self::sanitize_session_id((string) ($lead['session_id'] ?? ''));
+        $events = array_values(array_filter(self::get_events_raw(), function ($ev) use ($owner_user_id, $ref, $session_id) {
+            if (self::normalize_owner_user_id((int) ($ev['owner_user_id'] ?? 0)) !== $owner_user_id) {
+                return false;
+            }
+            $ev_ref = sanitize_text_field((string) ($ev['contact_ref'] ?? ''));
+            $ev_session = self::sanitize_session_id((string) ($ev['session_id'] ?? ''));
+            if ($ref !== '' && $ev_ref === $ref) {
+                return true;
+            }
+            if ($session_id !== '' && $ev_session === $session_id) {
+                return true;
+            }
+            return false;
+        }));
+        usort($events, function ($a, $b) {
+            $ta = strtotime((string) ($a['created_at'] ?? '')) ?: 0;
+            $tb = strtotime((string) ($b['created_at'] ?? '')) ?: 0;
+            return $ta <=> $tb;
+        });
+        return $events;
+    }
+
     public static function render_prospects_page() {
         if (!current_user_can('manage_options')) {
             return;
         }
         self::process_lead_actions();
         $all_leads = self::get_leads();
-        // "Prospects" acts as a full leads view (including leads that also have a RDV).
         $leads = array_values($all_leads);
         $filters = self::current_lead_filters();
         $leads = self::filter_leads($leads, $filters);
-        echo '<div class="wrap"><h1>Liste des prospects</h1>';
+        echo '<div class="wrap"><h1>Contacts (Leads)</h1>';
         echo '<p><strong>Total base:</strong> ' . (int) count($all_leads) . '</p>';
         echo '<p><strong>Total affiché:</strong> ' . (int) count($leads) . '</p>';
         self::render_leads_filters_form('azsa-prospects', $filters);
@@ -949,7 +1038,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         $events = array_slice($events, 0, 300);
 
         echo '<div class="wrap"><h1>Événements</h1>';
-        echo '<p>Historique des sessions et actions (visiteur, assistant, admin).</p>';
+        echo '<p>Liste unique des événements (visiteurs, assistants, admins, RDV, actions CRM).</p>';
         echo '<form method="get" style="margin:0 0 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:end;">';
         echo '<input type="hidden" name="page" value="azsa-events"/>';
         echo '<div><label for="azsa_ev_actor">Acteur</label><br/><input id="azsa_ev_actor" type="text" name="actor" value="' . esc_attr($actor) . '" placeholder="visitor / assistant / admin"/></div>';
@@ -966,7 +1055,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         }
 
         echo '<table class="widefat striped"><thead><tr>';
-        echo '<th>Date</th><th>Acteur</th><th>Type</th><th>Session</th><th>Ref</th><th>Données</th>';
+        echo '<th>Date</th><th>Acteur</th><th>Type</th><th>Session</th><th>Contact</th><th>Données</th>';
         echo '</tr></thead><tbody>';
         foreach ($events as $ev) {
             $data_decoded = json_decode((string) ($ev['data'] ?? '{}'), true);
@@ -977,16 +1066,108 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             if (!is_string($json)) {
                 $json = '{}';
             }
+            $ref_raw = sanitize_text_field((string) ($ev['contact_ref'] ?? ''));
+            $view_contact = $ref_raw !== '' ? add_query_arg(array('page' => 'azsa-contact', 'ref' => $ref_raw), admin_url('admin.php')) : '';
             echo '<tr>';
             echo '<td>' . esc_html(self::format_date_short((string) ($ev['created_at'] ?? ''))) . '</td>';
             echo '<td>' . esc_html((string) ($ev['actor'] ?? '')) . '</td>';
             echo '<td>' . esc_html((string) ($ev['event_type'] ?? '')) . '</td>';
             echo '<td style="max-width:220px;word-break:break-all;">' . esc_html((string) ($ev['session_id'] ?? '')) . '</td>';
-            echo '<td>' . esc_html((string) ($ev['contact_ref'] ?? '')) . '</td>';
+            if ($view_contact !== '') {
+                echo '<td><a class="button button-small" href="' . esc_url($view_contact) . '">Voir la fiche</a></td>';
+            } else {
+                echo '<td>-</td>';
+            }
             echo '<td style="max-width:420px;"><pre style="white-space:pre-wrap;margin:0;">' . esc_html($json) . '</pre></td>';
             echo '</tr>';
         }
         echo '</tbody></table></div>';
+    }
+
+    public static function render_contact_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        self::process_lead_actions();
+        $owner_user_id = self::normalize_owner_user_id(get_current_user_id());
+        $ref = sanitize_text_field((string) ($_GET['ref'] ?? ''));
+        $lead = self::get_contact_by_ref($owner_user_id, $ref);
+
+        echo '<div class="wrap"><h1>Fiche contact</h1>';
+        if (empty($lead)) {
+            echo '<p>Contact introuvable.</p>';
+            echo '<p><a class="button" href="' . esc_url(admin_url('admin.php?page=azsa-prospects')) . '">Retour contacts</a></p></div>';
+            return;
+        }
+
+        $ref_raw = (string) ($lead['ref'] ?? '');
+        $nonce = wp_create_nonce('azsa_lead_action_' . $ref_raw);
+        $open_url = add_query_arg(array('page' => 'azsa-contact', 'ref' => $ref_raw, 'azsa_action' => 'mark_callback_open', '_wpnonce' => $nonce), admin_url('admin.php'));
+        $done_url = add_query_arg(array('page' => 'azsa-contact', 'ref' => $ref_raw, 'azsa_action' => 'mark_callback_done', '_wpnonce' => $nonce), admin_url('admin.php'));
+        $clear_url = add_query_arg(array('page' => 'azsa-contact', 'ref' => $ref_raw, 'azsa_action' => 'clear_callback', '_wpnonce' => $nonce), admin_url('admin.php'));
+        $delete_url = add_query_arg(array('page' => 'azsa-prospects', 'azsa_action' => 'delete_lead', 'ref' => $ref_raw, '_wpnonce' => $nonce), admin_url('admin.php'));
+        $email_raw = (string) ($lead['email'] ?? '');
+        $phone_raw = (string) ($lead['phone'] ?? '');
+        $callback_status = (string) ($lead['callback_status'] ?? '');
+
+        echo '<div style="background:#fff;border:1px solid #dcdcde;border-radius:10px;padding:14px;margin:0 0 12px;max-width:920px;">';
+        echo '<p><strong>Réf:</strong> ' . esc_html($ref_raw) . '</p>';
+        echo '<p><strong>Nom:</strong> ' . esc_html(trim((string) ($lead['first_name'] ?? '') . ' ' . (string) ($lead['last_name'] ?? ''))) . '</p>';
+        echo '<p><strong>Email:</strong> ' . esc_html($email_raw) . ' | <strong>Téléphone:</strong> ' . esc_html($phone_raw) . '</p>';
+        echo '<p><strong>Statut:</strong> ' . (!empty($lead['wants_rdv']) ? 'RDV téléphonique' : 'Prospect') . '</p>';
+        echo '</div>';
+
+        echo '<div class="azsa-actions-stack" style="margin:0 0 12px;">';
+        if ($callback_status !== 'open') {
+            echo '<a class="button button-small" href="' . esc_url($open_url) . '">Créer tâche rappel</a>';
+        }
+        if ($callback_status === 'open') {
+            echo '<a class="button button-small" href="' . esc_url($done_url) . '">Rappel fait</a>';
+        }
+        if ($callback_status !== '') {
+            echo '<a class="button button-small" href="' . esc_url($clear_url) . '">Retirer</a>';
+        }
+        if ($email_raw !== '') {
+            echo '<a class="button button-small" href="mailto:' . esc_attr($email_raw) . '">Email</a>';
+            echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier email" data-copy="' . esc_attr($email_raw) . '">Copier email</button>';
+        }
+        if ($phone_raw !== '') {
+            echo '<a class="button button-small" href="tel:' . esc_attr($phone_raw) . '">Appeler</a>';
+            echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier tél" data-copy="' . esc_attr($phone_raw) . '">Copier tél</button>';
+        }
+        echo '<a class="button button-small" style="border-color:#b32d2e;color:#b32d2e;" href="' . esc_url($delete_url) . '" onclick="return confirm(\'Supprimer définitivement ce contact ?\');">Supprimer</a>';
+        echo '<a class="button button-small" href="' . esc_url(admin_url('admin.php?page=azsa-prospects')) . '">Retour contacts</a>';
+        echo '</div>';
+
+        $timeline = self::get_contact_timeline($owner_user_id, $lead);
+        echo '<h2 style="margin:12px 0 8px;">Historique chronologique</h2>';
+        if (empty($timeline)) {
+            echo '<p>Aucun événement pour ce contact.</p></div>';
+            return;
+        }
+        echo '<table class="widefat striped"><thead><tr><th>Date</th><th>Acteur</th><th>Type</th><th>Détail</th></tr></thead><tbody>';
+        foreach ($timeline as $ev) {
+            echo '<tr>';
+            echo '<td>' . esc_html(self::format_date_short((string) ($ev['created_at'] ?? ''))) . '</td>';
+            echo '<td>' . esc_html((string) ($ev['actor'] ?? '')) . '</td>';
+            echo '<td>' . esc_html((string) ($ev['event_type'] ?? '')) . '</td>';
+            echo '<td>' . esc_html(self::event_data_to_text($ev)) . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+        echo "<script>
+document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var t = btn.getAttribute('data-copy') || '';
+    var label = btn.getAttribute('data-label') || 'Copier';
+    if (!t) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(function(){ btn.textContent='Copié'; setTimeout(function(){ btn.textContent = label; }, 1200); });
+    }
+  });
+});
+</script>";
+        echo '</div>';
     }
 
     public static function register_rest() {
@@ -1446,7 +1627,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Assistant CRM IA</title>
 <style>
-body{margin:0;background:#f1f6fb;font-family:Raleway,Segoe UI,Arial,sans-serif;color:#123d64}
+body{margin:0;background:#ffffff;font-family:Raleway,Segoe UI,Arial,sans-serif;color:#123d64}
 .ma-ai-stage{padding:8px 14px 12px}
 .ma-ai-stage__inner{max-width:1120px;margin:0 auto}
 .ma-ai-layout{width:100%;display:grid;grid-template-columns:minmax(320px,1fr) minmax(360px,1fr);gap:20px;align-items:stretch}
@@ -1833,6 +2014,52 @@ HTML;
         update_option(self::OPTION_EVENTS, $events, false);
     }
 
+    public static function get_admin_chat_state_raw() {
+        $raw = get_option(self::OPTION_ADMIN_CHAT_STATE, array());
+        return is_array($raw) ? $raw : array();
+    }
+
+    public static function get_admin_chat_state($owner_user_id, $session_id) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $session_id = self::sanitize_session_id($session_id);
+        if ($session_id === '') {
+            return array();
+        }
+        $raw = self::get_admin_chat_state_raw();
+        if (isset($raw[(string) $owner_user_id][$session_id]) && is_array($raw[(string) $owner_user_id][$session_id])) {
+            return $raw[(string) $owner_user_id][$session_id];
+        }
+        return array();
+    }
+
+    public static function set_admin_chat_state($owner_user_id, $session_id, $state) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $session_id = self::sanitize_session_id($session_id);
+        if ($session_id === '' || !is_array($state)) {
+            return;
+        }
+        $raw = self::get_admin_chat_state_raw();
+        if (!isset($raw[(string) $owner_user_id]) || !is_array($raw[(string) $owner_user_id])) {
+            $raw[(string) $owner_user_id] = array();
+        }
+        $state['updated_at'] = gmdate('c');
+        $raw[(string) $owner_user_id][$session_id] = $state;
+        update_option(self::OPTION_ADMIN_CHAT_STATE, $raw, false);
+    }
+
+    public static function clear_admin_chat_state($owner_user_id, $session_id) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $session_id = self::sanitize_session_id($session_id);
+        if ($session_id === '') {
+            return;
+        }
+        $raw = self::get_admin_chat_state_raw();
+        if (isset($raw[(string) $owner_user_id][$session_id])) {
+            unset($raw[(string) $owner_user_id][$session_id]);
+            update_option(self::OPTION_ADMIN_CHAT_STATE, $raw, false);
+        }
+    }
+
     public static function get_admin_notes() {
         $raw = get_option(self::OPTION_ADMIN_NOTES, array());
         return is_array($raw) ? $raw : array();
@@ -1988,6 +2215,87 @@ HTML;
         return array_slice($scored, 0, max(1, (int) $limit));
     }
 
+    public static function get_events_for_owner($owner_user_id, $limit = 30) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $rows = array_values(array_filter(self::get_events_raw(), function ($ev) use ($owner_user_id) {
+            return self::normalize_owner_user_id((int) ($ev['owner_user_id'] ?? 0)) === $owner_user_id;
+        }));
+        return array_slice($rows, 0, max(1, (int) $limit));
+    }
+
+    public static function admin_ai_intent($message, $last_contact_ref, $settings) {
+        $api_key = trim((string) ($settings['api_key'] ?? ''));
+        if ($api_key === '' && defined('ANTHROPIC_API_KEY')) {
+            $api_key = (string) ANTHROPIC_API_KEY;
+        }
+        if ($api_key === '') {
+            return array();
+        }
+
+        $system = "Tu es un routeur d'intentions CRM. Retourne STRICTEMENT un JSON valide: "
+            . "{\"action\":\"...\",\"target\":\"...\",\"note\":\"...\",\"phone\":\"...\"}. "
+            . "Actions autorisées: get_contact, add_note, update_phone, list_actions, list_events, summary, unknown. "
+            . "Règles: si l'utilisateur dit \"cette fiche\" ou équivalent, target=\"__CURRENT__\". "
+            . "Si demande de modification du téléphone sans numéro, action=update_phone et phone=\"\". "
+            . "Ne jamais inventer de valeur.";
+
+        $payload = array(
+            'model' => $settings['model'] ?: 'claude-sonnet-4-20250514',
+            'max_tokens' => 220,
+            'temperature' => 0.1,
+            'system' => $system,
+            'messages' => array(
+                array(
+                    'role' => 'user',
+                    'content' => array(
+                        array(
+                            'type' => 'text',
+                            'text' => "Message admin: " . wp_strip_all_tags((string) $message)
+                                . "\nDernier contact courant: " . (string) $last_contact_ref,
+                        ),
+                    ),
+                ),
+            ),
+        );
+
+        $res = wp_remote_post('https://api.anthropic.com/v1/messages', array(
+            'timeout' => 20,
+            'headers' => array(
+                'x-api-key' => $api_key,
+                'anthropic-version' => '2023-06-01',
+                'content-type' => 'application/json',
+            ),
+            'body' => wp_json_encode($payload),
+        ));
+        if (is_wp_error($res) || (int) wp_remote_retrieve_response_code($res) >= 300) {
+            return array();
+        }
+        $body = json_decode((string) wp_remote_retrieve_body($res), true);
+        if (!is_array($body) || empty($body['content'])) {
+            return array();
+        }
+        $txt = '';
+        foreach ((array) $body['content'] as $c) {
+            if (($c['type'] ?? '') === 'text') {
+                $txt .= (string) ($c['text'] ?? '');
+            }
+        }
+        $txt = trim((string) $txt);
+        $data = json_decode($txt, true);
+        if (!is_array($data) && preg_match('/\{.*\}/s', $txt, $m)) {
+            $data = json_decode((string) $m[0], true);
+        }
+        if (!is_array($data)) {
+            return array();
+        }
+        return array(
+            'action' => sanitize_key((string) ($data['action'] ?? '')),
+            'target' => trim((string) ($data['target'] ?? '')),
+            'note' => trim((string) ($data['note'] ?? '')),
+            'phone' => trim((string) ($data['phone'] ?? '')),
+        );
+    }
+
     public static function rest_admin_assistant_chat(WP_REST_Request $request) {
         $owner_user_id = self::normalize_owner_user_id((int) $request->get_param('owner_id'));
         $token = sanitize_text_field((string) $request->get_param('token'));
@@ -2012,8 +2320,109 @@ HTML;
         $reply = '';
         $suggestions = array('Dernières actions', 'Fiche du dernier contact', 'Numéro du dernier contact');
         $out_ref = $last_contact_ref;
+        $admin_state = self::get_admin_chat_state($owner_user_id, $session_id);
+        $settings = self::get_settings($owner_user_id);
+        $ai_intent = self::admin_ai_intent($message, $last_contact_ref, $settings);
+        $ai_action = (string) ($ai_intent['action'] ?? '');
+        $ai_target = (string) ($ai_intent['target'] ?? '');
+        $ai_note = (string) ($ai_intent['note'] ?? '');
+        $ai_phone = preg_replace('/[^0-9+\s().-]/', '', (string) ($ai_intent['phone'] ?? ''));
 
-        if (preg_match('/^note pour\s+(.+?)[\:\-]\s*(.+)$/iu', $message, $m)) {
+        if ($reply === '' && in_array($ai_action, array('get_contact', 'add_note', 'update_phone', 'list_actions', 'list_events', 'summary'), true)) {
+            $target = $ai_target;
+            if ($target === '__CURRENT__' || $target === '' || strpos(strtolower($target), 'cette fiche') !== false) {
+                $target = $last_contact_ref;
+            }
+            if ($ai_action === 'get_contact') {
+                $contact = $target !== '' ? self::find_contact_by_query($leads, $target, $last_contact_ref) : self::find_contact_by_query($leads, '', $last_contact_ref);
+                if (!empty($contact['ref'])) {
+                    $out_ref = (string) $contact['ref'];
+                    $name = trim((string) ($contact['first_name'] ?? '') . ' ' . (string) ($contact['last_name'] ?? ''));
+                    $reply = "Fiche contact:\n"
+                        . "- Réf: " . $out_ref . "\n"
+                        . "- Nom: " . ($name !== '' ? $name : 'N/A') . "\n"
+                        . "- Email: " . ((string) ($contact['email'] ?? '') !== '' ? (string) $contact['email'] : 'N/A') . "\n"
+                        . "- Téléphone: " . ((string) ($contact['phone'] ?? '') !== '' ? (string) $contact['phone'] : 'N/A');
+                }
+            } elseif ($ai_action === 'add_note') {
+                $contact = $target !== '' ? self::find_contact_by_query($leads, $target, $last_contact_ref) : self::find_contact_by_query($leads, '', $last_contact_ref);
+                if (!empty($contact['ref']) && $ai_note !== '') {
+                    $out_ref = (string) $contact['ref'];
+                    self::add_admin_note($owner_user_id, $out_ref, $ai_note);
+                    $reply = 'Note enregistrée sur la fiche en cours.';
+                }
+            } elseif ($ai_action === 'update_phone') {
+                $contact = $target !== '' ? self::find_contact_by_query($leads, $target, $last_contact_ref) : self::find_contact_by_query($leads, '', $last_contact_ref);
+                if (!empty($contact['ref'])) {
+                    $out_ref = (string) $contact['ref'];
+                    if (trim((string) $ai_phone) === '') {
+                        self::set_admin_chat_state($owner_user_id, $session_id, array('await' => 'phone', 'ref' => $out_ref));
+                        $reply = "D’accord. Quel numéro voulez-vous enregistrer pour cette fiche ?";
+                    } else {
+                        $updated = self::update_lead_phone($owner_user_id, $out_ref, $ai_phone);
+                        if ($updated) {
+                            self::clear_admin_chat_state($owner_user_id, $session_id);
+                            $reply = "Numéro mis à jour pour la fiche " . $out_ref . ": " . trim((string) $ai_phone) . ".";
+                        }
+                    }
+                }
+            } elseif ($ai_action === 'list_actions') {
+                $items = array_slice($leads, 0, 8);
+                if (!empty($items)) {
+                    $lines = array();
+                    foreach ($items as $lead) {
+                        $name = trim((string) ($lead['first_name'] ?? '') . ' ' . (string) ($lead['last_name'] ?? ''));
+                        $name = $name !== '' ? $name : ((string) ($lead['email'] ?? '') !== '' ? (string) $lead['email'] : (string) ($lead['ref'] ?? ''));
+                        $date = self::format_date_short((string) ($lead['created_at'] ?? ''));
+                        $kind = !empty($lead['wants_rdv']) ? 'RDV' : 'Lead';
+                        $lines[] = '- ' . $date . ' | ' . $kind . ' | ' . $name;
+                    }
+                    $reply = "Dernières actions:\n" . implode("\n", $lines);
+                }
+            } elseif ($ai_action === 'list_events') {
+                $events = self::get_events_for_owner($owner_user_id, 8);
+                if (!empty($events)) {
+                    $lines = array();
+                    foreach ($events as $ev) {
+                        $lines[] = '- ' . self::format_date_short((string) ($ev['created_at'] ?? ''))
+                            . ' | ' . (string) ($ev['actor'] ?? '')
+                            . ' | ' . (string) ($ev['event_type'] ?? '');
+                    }
+                    $reply = "Derniers événements:\n" . implode("\n", $lines);
+                }
+            } elseif ($ai_action === 'summary') {
+                $count = count($leads);
+                $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
+                $reply = "Vue CRM rapide: " . $count . " contacts au total, dont " . $rdv . " avec RDV.";
+            }
+            if ($reply !== '') {
+                self::log_event($owner_user_id, 'admin', 'admin_ai_router_used', array(
+                    'action' => $ai_action,
+                    'target' => $ai_target,
+                ), $session_id, $out_ref);
+            }
+        }
+
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'phone' && !empty($admin_state['ref'])) {
+            $candidate_phone = preg_replace('/[^0-9+\s().-]/', '', (string) $message);
+            $digits = preg_replace('/\D/', '', (string) $candidate_phone);
+            if (strlen((string) $digits) >= 8) {
+                $target_ref = sanitize_text_field((string) $admin_state['ref']);
+                $updated = self::update_lead_phone($owner_user_id, $target_ref, $candidate_phone);
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                if ($updated) {
+                    $out_ref = $target_ref;
+                    $reply = "Numéro mis à jour pour la fiche " . $target_ref . ": " . trim((string) $candidate_phone) . ".";
+                    self::log_event($owner_user_id, 'admin', 'contact_phone_updated', array(
+                        'phone' => trim((string) $candidate_phone),
+                    ), $session_id, $target_ref);
+                } else {
+                    $reply = "Je n’ai pas réussi à mettre à jour le numéro sur cette fiche.";
+                }
+            } else {
+                $reply = "Je n’ai pas reconnu un numéro valide. Donnez-moi un téléphone (au moins 8 chiffres).";
+            }
+        } elseif ($reply === '' && preg_match('/^note pour\s+(.+?)[\:\-]\s*(.+)$/iu', $message, $m)) {
             $target = trim((string) $m[1]);
             $note = trim((string) $m[2]);
             $contact = self::find_contact_by_query($leads, $target, $last_contact_ref);
@@ -2024,7 +2433,51 @@ HTML;
             } else {
                 $reply = 'Contact introuvable pour enregistrer la note.';
             }
-        } elseif (strpos($lower, 'fiche') !== false || strpos($lower, 'contact') !== false || strpos($lower, 'num') !== false || strpos($lower, 'tél') !== false || strpos($lower, 'tel') !== false) {
+        } elseif ($reply === '' &&
+            preg_match('/\b(note|ecris|écris|ajoute)\b/iu', $message)
+            && preg_match('/[\:\-]/u', $message)
+            && (strpos($lower, 'cette fiche') !== false || strpos($lower, 'fiche') !== false || strpos($lower, 'contact') !== false)
+        ) {
+            $parts = preg_split('/[\:\-]/u', $message, 2);
+            $note = isset($parts[1]) ? trim((string) $parts[1]) : '';
+            $contact = array();
+            if ($last_contact_ref !== '') {
+                $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
+            }
+            if (!empty($contact['ref']) && $note !== '') {
+                self::add_admin_note($owner_user_id, (string) $contact['ref'], $note);
+                $out_ref = (string) $contact['ref'];
+                $reply = 'Note enregistrée sur la fiche en cours.';
+            } else {
+                $reply = "Je n’ai pas de fiche active. Ouvrez d’abord une fiche contact.";
+            }
+        } elseif ($reply === '' &&
+            preg_match('/\b(modif|modifie|modifier|change|changer|mettre a jour|mettre à jour)\b/iu', $message)
+            && preg_match('/\b(numero|numéro|telephone|t[eé]l)\b/iu', $message)
+        ) {
+            $query = self::extract_contact_query($message);
+            $contact = array();
+            if ($query !== '') {
+                $matchesOne = self::find_contacts_by_query($leads, $query, 1);
+                if (!empty($matchesOne[0])) {
+                    $contact = $matchesOne[0];
+                }
+            }
+            if (empty($contact['ref']) && $last_contact_ref !== '') {
+                $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
+            }
+            if (!empty($contact['ref'])) {
+                $out_ref = (string) $contact['ref'];
+                self::set_admin_chat_state($owner_user_id, $session_id, array(
+                    'await' => 'phone',
+                    'ref' => $out_ref,
+                ));
+                $reply = "D’accord. Quel numéro voulez-vous enregistrer pour cette fiche ?";
+                $suggestions = array('06 12 34 56 78', 'Voir la fiche', 'Dernières actions');
+            } else {
+                $reply = "Je n’ai pas trouvé la fiche à modifier. Donnez le nom, l’email ou ouvrez d’abord la fiche.";
+            }
+        } elseif ($reply === '' && (strpos($lower, 'fiche') !== false || strpos($lower, 'contact') !== false || strpos($lower, 'num') !== false || strpos($lower, 'tél') !== false || strpos($lower, 'tel') !== false)) {
             $query = self::extract_contact_query($message);
             $contact = array();
             $matches = array();
@@ -2033,7 +2486,8 @@ HTML;
                 if (!empty($matches[0])) {
                     $contact = $matches[0];
                 }
-            } elseif ($last_contact_ref !== '') {
+            }
+            if (empty($contact['ref']) && $last_contact_ref !== '') {
                 $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
             }
             if (empty($contact['ref'])) {
@@ -2067,7 +2521,7 @@ HTML;
                     }
                 }
             }
-        } elseif (strpos($lower, 'action') !== false || strpos($lower, 'évén') !== false || strpos($lower, 'even') !== false || strpos($lower, 'historique') !== false) {
+        } elseif ($reply === '' && (strpos($lower, 'action') !== false || strpos($lower, 'évén') !== false || strpos($lower, 'even') !== false || strpos($lower, 'historique') !== false)) {
             $items = array_slice($leads, 0, 8);
             if (empty($items)) {
                 $reply = 'Aucune action enregistrée pour le moment.';
@@ -2083,7 +2537,7 @@ HTML;
                 $reply = "Dernières actions:\n" . implode("\n", $lines);
                 $out_ref = (string) ($items[0]['ref'] ?? '');
             }
-        } else {
+        } elseif ($reply === '') {
             $count = count($leads);
             $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
             $reply = "Vue CRM rapide: " . $count . " contacts au total, dont " . $rdv . " avec RDV. "

@@ -213,6 +213,12 @@
       panel.classList.remove('azsa-open');
       opened = false;
       closeBooking();
+      if (lead.stage === 'await_booking') {
+        lead.wantsRdv = false;
+        lead.rdvDetected = false;
+        if (lead.intent === 'rdv') lead.intent = 'recap';
+        lead.stage = 'none';
+      }
     }
 
     function getCalendlyUrl() {
@@ -744,7 +750,15 @@
       }
 
       if (lead.stage === 'await_booking') {
-        push('bot', "Je surveille votre réservation Calendly automatiquement.");
+        if (!bookingOpen) {
+          lead.wantsRdv = false;
+          lead.rdvDetected = false;
+          if (lead.intent === 'rdv') lead.intent = 'recap';
+          lead.stage = 'none';
+          push('bot', "La réservation n'est plus active. On continue dans le chat.");
+          return false;
+        }
+        push('bot', "Je surveille votre réservation Calendly automatiquement. Vous pouvez aussi cliquer sur \"Fermer calendrier\" pour annuler.");
         return true;
       }
 
