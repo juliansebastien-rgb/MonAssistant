@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.2
+ * Version: 3.6.3
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.2';
+    const VERSION = '3.6.3';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -19,11 +19,14 @@ final class AZSA_Plugin {
     const OPTION_ADMIN_CHAT_STATE = 'azsa_admin_chat_state';
     const OPTION_EVENTS = 'azsa_events';
     const OPTION_INDEX = 'azsa_index';
+    const OPTION_GLOBAL_RULES = 'azsa_global_rules';
     const CRON_HOOK = 'azsa_rebuild_index_cron';
+    const CRON_SYNC_GLOBAL_RULES = 'azsa_sync_global_rules_cron';
     const DEFAULT_ROBOT_LOGO_URL = 'https://monassistant.mapage-wp.online/wp-content/uploads/2026/03/MAP-logo-tete.gif';
     const DEFAULT_GIF_BASE_URL = 'https://monassistant.mapage-wp.online/wp-content/uploads/2026/03/';
     const DEFAULT_GITHUB_REPO = 'juliansebastien-rgb/MonAssistant';
     const DEFAULT_GITHUB_TOKEN = '';
+    const DEFAULT_GLOBAL_RULES_SOURCE = 'https://azertaf.com/wp-json/azsa/v1/global-rules';
 
     public static function init() {
         add_action('init', array(__CLASS__, 'register_assets'));
@@ -39,6 +42,7 @@ final class AZSA_Plugin {
         add_filter('plugin_auto_update_setting_html', array(__CLASS__, 'plugin_auto_update_setting_html'), 10, 3);
         add_action('admin_init', array(__CLASS__, 'handle_plugin_row_auto_update_toggle'));
         add_action('upgrader_process_complete', array(__CLASS__, 'clear_update_cache'), 10, 2);
+        add_action(self::CRON_SYNC_GLOBAL_RULES, array(__CLASS__, 'cron_sync_global_rules'));
 
         register_activation_hook(__FILE__, array(__CLASS__, 'activate'));
         register_deactivation_hook(__FILE__, array(__CLASS__, 'deactivate'));
@@ -61,9 +65,132 @@ final class AZSA_Plugin {
             'calendar_provider' => 'none',
             'calendly_url' => '',
             'calendly_pat' => '',
+            'global_rules_source_url' => self::DEFAULT_GLOBAL_RULES_SOURCE,
             'github_repo' => self::DEFAULT_GITHUB_REPO,
             'github_token' => self::DEFAULT_GITHUB_TOKEN,
         );
+    }
+
+    public static function site_host() {
+        $host = (string) parse_url(home_url('/'), PHP_URL_HOST);
+        $host = strtolower(trim($host));
+        if (strpos($host, 'www.') === 0) {
+            $host = substr($host, 4);
+        }
+        return $host;
+    }
+
+    public static function is_master_site() {
+        return self::site_host() === 'azertaf.com';
+    }
+
+    public static function get_global_rules_raw() {
+        $raw = get_option(self::OPTION_GLOBAL_RULES, array());
+        if (!is_array($raw)) {
+            $raw = array();
+        }
+        $rules = array();
+        if (!empty($raw['rules']) && is_array($raw['rules'])) {
+            foreach ($raw['rules'] as $r) {
+                $txt = trim(wp_strip_all_tags((string) $r));
+                if ($txt !== '') {
+                    $rules[] = $txt;
+                }
+            }
+        }
+        return array(
+            'rules' => array_values(array_slice(array_unique($rules), 0, 80)),
+            'updated_at' => sanitize_text_field((string) ($raw['updated_at'] ?? '')),
+            'source' => sanitize_key((string) ($raw['source'] ?? 'local')),
+        );
+    }
+
+    public static function save_global_rules($rules, $source = 'local') {
+        $clean = array();
+        foreach ((array) $rules as $r) {
+            $txt = trim(wp_strip_all_tags((string) $r));
+            if ($txt !== '') {
+                $clean[] = $txt;
+            }
+        }
+        $payload = array(
+            'rules' => array_values(array_slice(array_unique($clean), 0, 80)),
+            'updated_at' => gmdate('c'),
+            'source' => sanitize_key((string) $source),
+        );
+        update_option(self::OPTION_GLOBAL_RULES, $payload, false);
+        return $payload;
+    }
+
+    public static function add_global_rule($rule) {
+        $rule = trim(wp_strip_all_tags((string) $rule));
+        if ($rule === '') {
+            return false;
+        }
+        $raw = self::get_global_rules_raw();
+        $rules = (array) ($raw['rules'] ?? array());
+        if (!in_array($rule, $rules, true)) {
+            $rules[] = $rule;
+        }
+        self::save_global_rules($rules, 'local');
+        return true;
+    }
+
+    public static function sync_global_rules_from_master($force = false, $settings = array()) {
+        if (self::is_master_site()) {
+            return self::get_global_rules_raw();
+        }
+        if (!$force) {
+            $next = (int) get_transient('azsa_global_rules_next_sync');
+            if ($next > time()) {
+                return self::get_global_rules_raw();
+            }
+        }
+        if (empty($settings) || !is_array($settings)) {
+            $settings = self::get_settings();
+        }
+        $src = trim((string) ($settings['global_rules_source_url'] ?? self::DEFAULT_GLOBAL_RULES_SOURCE));
+        if ($src === '') {
+            $src = self::DEFAULT_GLOBAL_RULES_SOURCE;
+        }
+        $res = wp_remote_get($src, array('timeout' => 15, 'headers' => array('Accept' => 'application/json')));
+        if (is_wp_error($res) || (int) wp_remote_retrieve_response_code($res) >= 300) {
+            set_transient('azsa_global_rules_next_sync', time() + 300, 3600);
+            return self::get_global_rules_raw();
+        }
+        $body = json_decode((string) wp_remote_retrieve_body($res), true);
+        if (!is_array($body) || empty($body['rules']) || !is_array($body['rules'])) {
+            set_transient('azsa_global_rules_next_sync', time() + 300, 3600);
+            return self::get_global_rules_raw();
+        }
+        $saved = self::save_global_rules((array) $body['rules'], 'remote');
+        set_transient('azsa_global_rules_next_sync', time() + 1800, 3600);
+        return $saved;
+    }
+
+    public static function cron_sync_global_rules() {
+        self::sync_global_rules_from_master(false, self::get_settings());
+    }
+
+    public static function get_global_rules_prompt_block($settings = array()) {
+        $data = self::is_master_site()
+            ? self::get_global_rules_raw()
+            : self::sync_global_rules_from_master(false, $settings);
+        $rules = isset($data['rules']) && is_array($data['rules']) ? $data['rules'] : array();
+        if (empty($rules)) {
+            return '';
+        }
+        $lines = array();
+        foreach (array_slice($rules, 0, 16) as $r) {
+            $r = trim((string) $r);
+            if ($r !== '') {
+                $lines[] = '- ' . $r;
+            }
+        }
+        if (empty($lines)) {
+            return '';
+        }
+        return "Règles globales validées (à appliquer strictement):\n" . implode("\n", $lines);
     }
 
     public static function normalize_owner_user_id($owner_user_id) {
@@ -177,6 +304,10 @@ final class AZSA_Plugin {
         if (!$has_recurring) {
             wp_schedule_event(time() + 300, 'hourly', self::CRON_HOOK);
         }
+        $has_sync = wp_next_scheduled(self::CRON_SYNC_GLOBAL_RULES);
+        if (!$has_sync) {
+            wp_schedule_event(time() + 600, 'hourly', self::CRON_SYNC_GLOBAL_RULES);
+        }
         // Avoid timeout on activation: rebuild index asynchronously.
         update_option('azsa_needs_reindex', 1, false);
         wp_schedule_single_event(time() + 20, self::CRON_HOOK);
@@ -186,6 +317,10 @@ final class AZSA_Plugin {
         $ts = wp_next_scheduled(self::CRON_HOOK);
         if ($ts) {
             wp_unschedule_event($ts, self::CRON_HOOK);
+        }
+        $ts2 = wp_next_scheduled(self::CRON_SYNC_GLOBAL_RULES);
+        if ($ts2) {
+            wp_unschedule_event($ts2, self::CRON_SYNC_GLOBAL_RULES);
         }
     }
 
@@ -299,6 +434,9 @@ final class AZSA_Plugin {
         }
         if (isset($input['calendly_pat'])) {
             $out['calendly_pat'] = sanitize_text_field((string) $input['calendly_pat']);
+        }
+        if (isset($input['global_rules_source_url'])) {
+            $out['global_rules_source_url'] = esc_url_raw((string) $input['global_rules_source_url']);
         }
         $out['github_repo'] = self::DEFAULT_GITHUB_REPO;
         $out = wp_parse_args($out, self::defaults());
@@ -465,6 +603,13 @@ final class AZSA_Plugin {
                                 <td>
                                     <input id="azsa_calendly_pat" name="<?php echo self::OPTION_SETTINGS; ?>[calendly_pat]" type="password" class="regular-text" value="<?php echo esc_attr($settings['calendly_pat'] ?? ''); ?>" autocomplete="off" />
                                     <p class="description">Token personnel Calendly (Personal Access Token) pour récupérer nom, prénom, email et créneau du RDV.</p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><label for="azsa_global_rules_source_url">Source règles globales</label></th>
+                                <td>
+                                    <input id="azsa_global_rules_source_url" name="<?php echo self::OPTION_SETTINGS; ?>[global_rules_source_url]" type="url" class="regular-text" value="<?php echo esc_attr($settings['global_rules_source_url'] ?? self::DEFAULT_GLOBAL_RULES_SOURCE); ?>" />
+                                    <p class="description">URL JSON des règles globales. Laissez la valeur par défaut pour synchroniser depuis Azertaf.</p>
                                 </td>
                             </tr>
                         </table>
@@ -1575,6 +1720,130 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'permission_callback' => '__return_true',
             'callback' => array(__CLASS__, 'rest_admin_assistant_chat'),
         ));
+        register_rest_route('azsa/v1', '/admin-assistant/feedback', array(
+            'methods' => 'POST',
+            'permission_callback' => '__return_true',
+            'callback' => array(__CLASS__, 'rest_admin_assistant_feedback'),
+        ));
+        register_rest_route('azsa/v1', '/global-rules', array(
+            'methods' => 'GET',
+            'permission_callback' => '__return_true',
+            'callback' => array(__CLASS__, 'rest_global_rules'),
+        ));
+    }
+
+    public static function rest_global_rules(WP_REST_Request $request) {
+        $data = self::get_global_rules_raw();
+        return new WP_REST_Response(array(
+            'site' => self::site_host(),
+            'is_master' => self::is_master_site(),
+            'updated_at' => (string) ($data['updated_at'] ?? ''),
+            'rules' => array_values((array) ($data['rules'] ?? array())),
+        ), 200);
+    }
+
+    public static function rest_admin_assistant_feedback(WP_REST_Request $request) {
+        $owner_user_id = self::normalize_owner_user_id((int) $request->get_param('owner_id'));
+        $token = sanitize_text_field((string) $request->get_param('token'));
+        if (!self::validate_admin_assistant_token($owner_user_id, $token)) {
+            return new WP_REST_Response(array('ok' => false, 'message' => 'Accès refusé.'), 403);
+        }
+        $vote = sanitize_key((string) $request->get_param('vote'));
+        $reply_text = trim((string) $request->get_param('reply_text'));
+        $question_text = trim((string) $request->get_param('question_text'));
+        $session_id = self::sanitize_session_id((string) $request->get_param('session_id'));
+        if ($session_id === '') {
+            $session_id = self::create_session_id('admin');
+        }
+        if (!in_array($vote, array('up', 'down'), true) || $reply_text === '') {
+            return new WP_REST_Response(array('ok' => false, 'message' => 'Paramètres manquants.'), 400);
+        }
+
+        self::log_event($owner_user_id, 'admin', $vote === 'up' ? 'answer_feedback_up' : 'answer_feedback_down', array(
+            'question' => self::smart_trim($question_text, 240),
+            'reply' => self::smart_trim($reply_text, 280),
+        ), $session_id);
+
+        if ($vote === 'up') {
+            return new WP_REST_Response(array(
+                'ok' => true,
+                'message' => 'Merci, réponse validée.',
+            ), 200);
+        }
+
+        if (!self::is_master_site()) {
+            return new WP_REST_Response(array(
+                'ok' => true,
+                'message' => 'Merci pour le retour. Suggestion enregistrée.',
+            ), 200);
+        }
+
+        $settings = self::get_settings($owner_user_id);
+        $proposal = self::build_improvement_rule_from_feedback($question_text, $reply_text, $settings);
+        if ($proposal === '') {
+            $proposal = "Quand une réponse est ambiguë ou imprécise, demander une clarification avant d'agir sur une fiche contact.";
+        }
+        self::set_admin_chat_state($owner_user_id, $session_id, array(
+            'await' => 'improve_confirm',
+            'rule_text' => $proposal,
+        ));
+
+        return new WP_REST_Response(array(
+            'ok' => true,
+            'message' => "Proposition d’amélioration:\n- " . $proposal . "\n\nRépondez Oui pour la publier globalement, ou Non pour l’annuler.",
+            'suggestions' => array('Oui', 'Non'),
+        ), 200);
+    }
+
+    public static function build_improvement_rule_from_feedback($question_text, $reply_text, $settings) {
+        $api_key = trim((string) ($settings['api_key'] ?? ''));
+        if ($api_key === '' && defined('ANTHROPIC_API_KEY')) {
+            $api_key = (string) ANTHROPIC_API_KEY;
+        }
+        if ($api_key === '') {
+            return '';
+        }
+        $payload = array(
+            'model' => $settings['model'] ?: 'claude-sonnet-4-20250514',
+            'max_tokens' => 120,
+            'temperature' => 0.1,
+            'system' => "Tu es un auditeur qualité. Retourne une seule règle d'amélioration concise, actionnable, en français, sans puce, sans préambule.",
+            'messages' => array(
+                array(
+                    'role' => 'user',
+                    'content' => array(
+                        array(
+                            'type' => 'text',
+                            'text' => "Question: " . wp_strip_all_tags($question_text) . "\nRéponse donnée: " . wp_strip_all_tags($reply_text),
+                        ),
+                    ),
+                ),
+            ),
+        );
+        $res = wp_remote_post('https://api.anthropic.com/v1/messages', array(
+            'timeout' => 20,
+            'headers' => array(
+                'x-api-key' => $api_key,
+                'anthropic-version' => '2023-06-01',
+                'content-type' => 'application/json',
+            ),
+            'body' => wp_json_encode($payload),
+        ));
+        if (is_wp_error($res) || (int) wp_remote_retrieve_response_code($res) >= 300) {
+            return '';
+        }
+        $body = json_decode((string) wp_remote_retrieve_body($res), true);
+        if (!is_array($body) || empty($body['content']) || !is_array($body['content'])) {
+            return '';
+        }
+        $txt = '';
+        foreach ($body['content'] as $c) {
+            if (($c['type'] ?? '') === 'text') {
+                $txt .= (string) ($c['text'] ?? '');
+            }
+        }
+        $txt = trim(wp_strip_all_tags((string) $txt));
+        return self::smart_trim($txt, 240);
     }
 
     public static function rest_calendly_resolve(WP_REST_Request $request) {
@@ -1985,9 +2254,11 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'owner_id' => $owner_user_id,
             'token' => $token,
             'endpoint' => esc_url_raw(rest_url('azsa/v1/admin-assistant/chat')),
+            'feedback_endpoint' => esc_url_raw(rest_url('azsa/v1/admin-assistant/feedback')),
             'tts_url' => esc_url_raw(rest_url('azsa/v1/tts')),
             'site_name' => get_bloginfo('name'),
             'lang' => 'fr',
+            'is_master' => self::is_master_site(),
             'character_gif_url' => (string) ($settings['character_gif_url'] ?? ''),
             'gif_base_url' => (string) ($settings['character_gif_base_url'] ?? self::DEFAULT_GIF_BASE_URL),
             'history' => array_values((array) ($admin_ctx['messages'] ?? array())),
@@ -2023,6 +2294,9 @@ body{margin:0;background:#ffffff;font-family:Raleway,Segoe UI,Arial,sans-serif;c
 .ma-ai-bubble{max-width:88%;padding:10px 12px;border-radius:14px;line-height:1.45;font-size:14px;white-space:pre-wrap;word-wrap:break-word}
 .ma-ai-msg-assistant .ma-ai-bubble{background:#eef6ff;color:#123d64;border:1px solid rgba(18,61,100,.14);border-bottom-left-radius:6px}
 .ma-ai-msg-user .ma-ai-bubble{background:#123d64;color:#fff;border:1px solid rgba(18,61,100,.24);border-bottom-right-radius:6px}
+.ma-ai-feedback{display:flex;gap:6px;align-items:center;margin-top:5px}
+.ma-ai-feedback button{border:1px solid rgba(18,61,100,.2);background:#fff;color:#123d64;border-radius:999px;padding:2px 8px;font-size:11px;cursor:pointer}
+.ma-ai-feedback button:hover{background:#eef6ff}
 .ma-ai-suggestions{display:flex;flex-wrap:wrap;gap:8px}
 .ma-ai-suggest-btn{border:1px solid rgba(18,61,100,.20);border-radius:999px;background:#f4f9ff;color:#123d64;font-size:12px;padding:7px 10px;cursor:pointer}
 .ma-ai-suggest-btn:hover{background:#e6f1ff}
@@ -2153,16 +2427,69 @@ function restoreServerHistory(){
 function pushMessage(role,text,skipStore){
   var row=document.createElement('div');
   row.className='ma-ai-msg ma-ai-msg-'+(role==='user'?'user':'assistant');
+  row.dataset.role=(role==='user'?'user':'assistant');
   var bubble=document.createElement('div');
   bubble.className='ma-ai-bubble';
   bubble.textContent=(text||'').toString();
   row.appendChild(bubble);
+  if(role==='assistant' && c.is_master){
+    var fb=document.createElement('div');
+    fb.className='ma-ai-feedback';
+    var up=document.createElement('button');
+    up.type='button';
+    up.textContent='👍';
+    up.title='Réponse utile';
+    var down=document.createElement('button');
+    down.type='button';
+    down.textContent='👎';
+    down.title='À améliorer';
+    up.addEventListener('click',function(){sendFeedback('up',(text||'').toString(),up,down);});
+    down.addEventListener('click',function(){sendFeedback('down',(text||'').toString(),up,down);});
+    fb.appendChild(up);
+    fb.appendChild(down);
+    row.appendChild(fb);
+  }
   thread.appendChild(row);
   thread.scrollTop=thread.scrollHeight;
   if(!skipStore){
     chatMessages.push({role:(role==='user'?'user':'assistant'),text:(text||'').toString()});
     if(chatMessages.length>180){chatMessages=chatMessages.slice(-180);}
     saveState();
+  }
+}
+function getLastUserMessage(){
+  for(var i=chatMessages.length-1;i>=0;i--){
+    if(chatMessages[i]&&chatMessages[i].role==='user'){return String(chatMessages[i].text||'');}
+  }
+  return '';
+}
+async function sendFeedback(vote,replyText,upBtn,downBtn){
+  try{
+    if(!c.feedback_endpoint){return;}
+    if(upBtn){upBtn.disabled=true;}
+    if(downBtn){downBtn.disabled=true;}
+    var res=await fetch(c.feedback_endpoint,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        owner_id:c.owner_id,
+        token:c.token,
+        vote:vote,
+        reply_text:replyText,
+        question_text:getLastUserMessage(),
+        session_id:chatSessionId
+      })
+    });
+    var d=await res.json();
+    if(d&&d.message){pushMessage('assistant',String(d.message||''));}
+    if(d&&d.session_id){chatSessionId=String(d.session_id);}
+    if(d&&Array.isArray(d.suggestions)){setSuggestions(d.suggestions.slice(0,4));}
+    saveState();
+  }catch(e){
+    pushMessage('assistant','Retour qualité non enregistré (erreur temporaire).');
+  }finally{
+    if(upBtn){upBtn.disabled=false;}
+    if(downBtn){downBtn.disabled=false;}
   }
 }
 function setSuggestions(items){
@@ -2909,6 +3236,9 @@ HTML;
             $out[] = 'Dernières actions';
             $out[] = 'Derniers événements';
         }
+        if (self::is_master_site()) {
+            $out[] = 'Proposer amélioration';
+        }
 
         if (empty($out)) {
             $out = array('Fiche du dernier contact', 'Dernières actions', 'Ajouter une note');
@@ -2942,6 +3272,7 @@ HTML;
         $out_ref = $last_contact_ref;
         $admin_state = self::get_admin_chat_state($owner_user_id, $session_id);
         $settings = self::get_settings($owner_user_id);
+        self::sync_global_rules_from_master(false, $settings);
         $ai_intent = self::admin_ai_intent($message, $last_contact_ref, $settings);
         $ai_action = (string) ($ai_intent['action'] ?? '');
         $ai_target = (string) ($ai_intent['target'] ?? '');
@@ -2952,6 +3283,52 @@ HTML;
             self::log_event($owner_user_id, 'admin', $important_event_type, array(
                 'message' => self::smart_trim($message, 240),
             ), $session_id, $last_contact_ref);
+        }
+
+        if ($reply === '' && self::is_master_site() && !empty($admin_state['await']) && (string) $admin_state['await'] === 'improve_confirm' && !empty($admin_state['rule_text'])) {
+            $rule_text = trim((string) $admin_state['rule_text']);
+            if (self::text_is_yes($message)) {
+                self::add_global_rule($rule_text);
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $reply = "Amélioration validée et publiée globalement. Elle sera synchronisée sur les autres sites.";
+                $suggestions = array('Proposer amélioration', 'Dernières actions', 'Voir la fiche en cours');
+                self::log_event($owner_user_id, 'admin', 'global_rule_added', array(
+                    'rule' => self::smart_trim($rule_text, 300),
+                ), $session_id, $last_contact_ref);
+            } elseif (self::text_is_no($message)) {
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $reply = "D’accord, amélioration annulée.";
+            } else {
+                $reply = "Confirmez par Oui pour publier cette amélioration, ou Non pour annuler.";
+                $suggestions = array('Oui', 'Non');
+            }
+        }
+
+        if ($reply === '' && self::is_master_site() && !empty($admin_state['await']) && (string) $admin_state['await'] === 'improve_text') {
+            $rule_text = self::ai_polish_french_text($message, $settings);
+            if (trim((string) $rule_text) === '') {
+                $reply = "Je n’ai pas compris l’amélioration. Reformulez en une règle claire.";
+            } else {
+                self::set_admin_chat_state($owner_user_id, $session_id, array(
+                    'await' => 'improve_confirm',
+                    'rule_text' => $rule_text,
+                ));
+                $reply = "Proposition détectée:\n- " . $rule_text . "\n\nVoulez-vous la publier globalement ? (Oui/Non)";
+                $suggestions = array('Oui', 'Non');
+            }
+        }
+
+        if (
+            $reply === ''
+            && self::is_master_site()
+            && (
+                (preg_match('/\b(proposer|propose|amelioration|amélioration|regle|r[eè]gle)\b/iu', $message) && strpos(self::normalize_search_text($message), 'global') !== false)
+                || self::normalize_search_text($message) === 'proposer amelioration'
+            )
+        ) {
+            self::set_admin_chat_state($owner_user_id, $session_id, array('await' => 'improve_text'));
+            $reply = "Indiquez la règle d’amélioration à appliquer globalement (comportement, ton, restriction, workflow).";
+            $suggestions = array('Annuler');
         }
 
         if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'contact_pick' && !empty($admin_state['refs']) && is_array($admin_state['refs'])) {
@@ -3674,6 +4051,7 @@ HTML;
 
         $hits = self::search_docs($message, $docs, 5);
         $settings = self::get_settings();
+        self::sync_global_rules_from_master(false, $settings);
 
         $llm = self::private_backend_chat($message, $hits, $settings);
         if (empty($llm['reply'])) {
@@ -4056,12 +4434,17 @@ HTML;
             $ctx[] = "Titre: {$h['title']}\nURL: {$h['url']}\nContenu: {$h['content']}";
         }
 
+        $global_rules_block = self::get_global_rules_prompt_block($settings);
+
         $system = "Tu es un assistant expert du site web. Réponds en français (sauf demande explicite), ton clair, naturel, ponctué, avec accents corrects. "
             . "Base-toi strictement sur les extraits fournis et ne fabrique rien. Si le sujet n'est pas clairement présent dans les extraits: dis-le explicitement. "
             . "Ne redirige pas vers des offres/formations hors sujet. Si un nom précis est demandé (ex: Amadeus), confirme d'abord sa présence dans les extraits; sinon indique que l'information n'est pas disponible sur cette base. "
             . "Tu dois produire STRICTEMENT du JSON valide avec ce schéma: "
             . "{\"reply\":\"texte réponse utile\",\"suggestions\":[\"question courte 1\",\"question courte 2\",\"question courte 3\"]}. "
             . "Les suggestions doivent être contextuelles à la question et à ta réponse, max 3 à 4 mots chacune, sans URL, sans ponctuation finale.";
+        if ($global_rules_block !== '') {
+            $system .= "\n\n" . $global_rules_block;
+        }
 
         $payload = array(
             'model' => $settings['model'] ?: 'claude-sonnet-4-20250514',
