@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.7
+ * Version: 3.6.8
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.7';
+    const VERSION = '3.6.8';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -1345,7 +1345,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         if (!is_array($data)) {
             $data = array();
         }
-        if (in_array($event_type, array('call_outbound', 'call_inbound'), true)) {
+        if (in_array($event_type, array('call_outbound', 'call_inbound', 'sms_sent', 'whatsapp_sent'), true)) {
             $parts = array();
             $phone = trim((string) ($data['phone'] ?? ''));
             $msg = trim((string) ($data['message'] ?? ''));
@@ -3863,9 +3863,13 @@ HTML;
                 self::clear_admin_chat_state($owner_user_id, $session_id);
                 $reply = "D’accord, compte-rendu SMS ignoré.";
             } else {
-                self::log_event($owner_user_id, 'admin', 'sms_report', array(
-                    'report' => self::smart_trim($message, 500),
-                ), $session_id, $target_ref);
+                $report_txt = self::smart_trim($message, 500);
+                $merged = self::merge_report_into_recent_event($owner_user_id, $session_id, $target_ref, 'sms_sent', $report_txt);
+                if (!$merged) {
+                    self::log_event($owner_user_id, 'admin', 'sms_report', array(
+                        'report' => $report_txt,
+                    ), $session_id, $target_ref);
+                }
                 self::clear_admin_chat_state($owner_user_id, $session_id);
                 $out_ref = $target_ref;
                 $reply = "Compte-rendu SMS enregistré sur la fiche " . $target_ref . ".";
@@ -3879,9 +3883,13 @@ HTML;
                 self::clear_admin_chat_state($owner_user_id, $session_id);
                 $reply = "D’accord, compte-rendu WhatsApp ignoré.";
             } else {
-                self::log_event($owner_user_id, 'admin', 'whatsapp_report', array(
-                    'report' => self::smart_trim($message, 500),
-                ), $session_id, $target_ref);
+                $report_txt = self::smart_trim($message, 500);
+                $merged = self::merge_report_into_recent_event($owner_user_id, $session_id, $target_ref, 'whatsapp_sent', $report_txt);
+                if (!$merged) {
+                    self::log_event($owner_user_id, 'admin', 'whatsapp_report', array(
+                        'report' => $report_txt,
+                    ), $session_id, $target_ref);
+                }
                 self::clear_admin_chat_state($owner_user_id, $session_id);
                 $out_ref = $target_ref;
                 $reply = "Compte-rendu WhatsApp enregistré sur la fiche " . $target_ref . ".";
