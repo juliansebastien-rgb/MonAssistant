@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.9.2
+ * Version: 3.0.0
  * Author: Azertaf
  */
 
@@ -11,10 +11,11 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.9.2';
+    const VERSION = '3.0.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
+    const OPTION_ADMIN_NOTES = 'azsa_admin_notes';
     const OPTION_INDEX = 'azsa_index';
     const CRON_HOOK = 'azsa_rebuild_index_cron';
     const DEFAULT_ROBOT_LOGO_URL = 'https://monassistant.mapage-wp.online/wp-content/uploads/2026/03/MAP-logo-tete.gif';
@@ -25,6 +26,7 @@ final class AZSA_Plugin {
     public static function init() {
         add_action('init', array(__CLASS__, 'register_assets'));
         add_action('wp_enqueue_scripts', array(__CLASS__, 'enqueue_front'));
+        add_action('template_redirect', array(__CLASS__, 'maybe_render_admin_assistant_page'));
         add_action('admin_menu', array(__CLASS__, 'admin_menu'));
         add_action('admin_init', array(__CLASS__, 'register_settings'));
         add_action('rest_api_init', array(__CLASS__, 'register_rest'));
@@ -103,6 +105,40 @@ final class AZSA_Plugin {
             return $uid;
         }
         return self::get_public_owner_user_id();
+    }
+
+    public static function get_admin_assistant_token($owner_user_id, $regenerate = false) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $key = 'azsa_admin_assistant_token';
+        $token = (string) get_user_meta($owner_user_id, $key, true);
+        if ($regenerate || $token === '' || strlen($token) < 24) {
+            $token = wp_generate_password(48, false, false);
+            update_user_meta($owner_user_id, $key, $token);
+        }
+        return $token;
+    }
+
+    public static function validate_admin_assistant_token($owner_user_id, $token) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $stored = (string) self::get_admin_assistant_token($owner_user_id, false);
+        $token = (string) $token;
+        if ($stored === '' || $token === '') {
+            return false;
+        }
+        return hash_equals($stored, $token);
+    }
+
+    public static function get_admin_assistant_url($owner_user_id = null) {
+        if ($owner_user_id === null) {
+            $owner_user_id = self::get_runtime_owner_user_id();
+        }
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $token = self::get_admin_assistant_token($owner_user_id, false);
+        return add_query_arg(array(
+            'azsa_admin_assistant' => '1',
+            'owner' => $owner_user_id,
+            'token' => $token,
+        ), home_url('/'));
     }
 
     public static function get_settings($owner_user_id = null) {
@@ -281,6 +317,12 @@ final class AZSA_Plugin {
         if (!current_user_can('manage_options')) {
             return;
         }
+        $owner_user_id = self::get_runtime_owner_user_id();
+
+        if (isset($_POST['azsa_regen_admin_assistant_token']) && check_admin_referer('azsa_regen_admin_assistant_token', 'azsa_regen_admin_assistant_token_nonce')) {
+            self::get_admin_assistant_token($owner_user_id, true);
+            echo '<div class="notice notice-success"><p>Lien de l’assistant personnel régénéré.</p></div>';
+        }
 
         if (isset($_POST['azsa_check_updates']) && check_admin_referer('azsa_check_updates_now', 'azsa_check_updates_nonce')) {
             $settings = self::get_settings();
@@ -307,7 +349,8 @@ final class AZSA_Plugin {
             echo '<div class="notice notice-success"><p>Mises à jour automatiques désactivées.</p></div>';
         }
 
-        $settings = self::get_settings();
+        $settings = self::get_settings($owner_user_id);
+        $admin_assistant_url = self::get_admin_assistant_url($owner_user_id);
         $release = self::get_latest_github_release($settings, false);
         $latest = is_array($release) && !empty($release['version']) ? (string) $release['version'] : 'indisponible';
         $auto_enabled = self::is_auto_updates_enabled();
@@ -316,6 +359,14 @@ final class AZSA_Plugin {
         <div class="wrap">
             <h1>Chatbot Mon Assistant IA</h1>
             <p>Configurez uniquement la connexion au calendrier pour les RDV.</p>
+            <div style="margin:12px 0 18px;padding:12px 14px;background:#fff;border:1px solid #dcdcde;border-radius:10px;max-width:980px;">
+                <p style="margin:0 0 8px;"><strong>Assistant personnel pour l’administrateur:</strong></p>
+                <p style="margin:0 0 10px;word-break:break-all;"><a href="<?php echo esc_url($admin_assistant_url); ?>" target="_blank" rel="noopener"><?php echo esc_html($admin_assistant_url); ?></a></p>
+                <form method="post" style="margin:0;">
+                    <?php wp_nonce_field('azsa_regen_admin_assistant_token', 'azsa_regen_admin_assistant_token_nonce'); ?>
+                    <button type="submit" name="azsa_regen_admin_assistant_token" class="button">Régénérer le lien</button>
+                </form>
+            </div>
             <p>
                 <strong>Version installée:</strong> <?php echo esc_html(self::VERSION); ?> |
                 <strong>Dernière version:</strong> <?php echo esc_html($latest); ?> |
@@ -791,6 +842,11 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'permission_callback' => '__return_true',
             'callback' => array(__CLASS__, 'rest_calendly_poll'),
         ));
+        register_rest_route('azsa/v1', '/admin-assistant/chat', array(
+            'methods' => 'POST',
+            'permission_callback' => '__return_true',
+            'callback' => array(__CLASS__, 'rest_admin_assistant_chat'),
+        ));
     }
 
     public static function rest_calendly_resolve(WP_REST_Request $request) {
@@ -1179,6 +1235,184 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         delete_site_transient('update_plugins');
         wp_safe_redirect(admin_url('plugins.php'));
         exit;
+    }
+
+    public static function maybe_render_admin_assistant_page() {
+        if (is_admin()) {
+            return;
+        }
+        if ((string) ($_GET['azsa_admin_assistant'] ?? '') !== '1') {
+            return;
+        }
+        $owner_user_id = (int) ($_GET['owner'] ?? 0);
+        $token = sanitize_text_field((string) ($_GET['token'] ?? ''));
+        if (!self::validate_admin_assistant_token($owner_user_id, $token)) {
+            status_header(403);
+            wp_die('Accès refusé.');
+        }
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $cfg = array(
+            'owner_id' => $owner_user_id,
+            'token' => $token,
+            'endpoint' => esc_url_raw(rest_url('azsa/v1/admin-assistant/chat')),
+            'site_name' => get_bloginfo('name'),
+        );
+        status_header(200);
+        nocache_headers();
+        echo '<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>'
+            . '<title>Assistant CRM IA</title>'
+            . '<style>body{margin:0;background:#f1f6fb;font-family:Raleway,Segoe UI,Arial,sans-serif;color:#123d64}.wrap{max-width:980px;margin:20px auto;padding:0 14px}.card{background:#fff;border:1px solid rgba(18,61,100,.14);border-radius:16px;overflow:hidden;box-shadow:0 8px 28px rgba(18,61,100,.12)}.head{padding:14px 16px;background:linear-gradient(135deg,#123d64,#1c6ea4);color:#fff}.head h1{margin:0;font-size:18px}.head p{margin:4px 0 0;font-size:12px;opacity:.92}.thread{height:62vh;overflow:auto;padding:12px;background:linear-gradient(180deg,#f7fbff,#fff)}.row{display:flex;margin:0 0 10px}.u{justify-content:flex-end}.b{justify-content:flex-start}.bubble{max-width:86%;padding:10px 12px;border-radius:14px;font-size:14px;line-height:1.45;white-space:pre-wrap}.u .bubble{background:#123d64;color:#fff;border-bottom-right-radius:6px}.b .bubble{background:#edf6ff;border:1px solid rgba(18,61,100,.14);border-bottom-left-radius:6px}.chips{display:flex;gap:8px;flex-wrap:wrap;padding:0 12px 10px}.chip{border:1px solid rgba(18,61,100,.18);background:#f4f9ff;color:#123d64;border-radius:999px;padding:6px 10px;font-size:12px;cursor:pointer}.form{display:flex;gap:8px;padding:10px;border-top:1px solid rgba(18,61,100,.12)}input{flex:1;border:1px solid rgba(18,61,100,.22);border-radius:12px;padding:10px;font-size:14px}button{border:1px solid rgba(18,61,100,.24);border-radius:12px;background:#123d64;color:#fff;padding:9px 12px;font-weight:700;cursor:pointer}.status{padding:0 12px 10px;font-size:12px;color:#4f6984}</style>'
+            . '</head><body><div class="wrap"><div class="card"><div class="head"><h1>Assistant CRM IA</h1><p>Connecté à ' . esc_html((string) $cfg['site_name']) . '</p></div><div class="thread" id="azsa-admin-thread"></div><div class="chips" id="azsa-admin-chips"></div><div class="status" id="azsa-admin-status">Prêt</div><form class="form" id="azsa-admin-form"><input id="azsa-admin-input" type="text" placeholder="Ex: dernieres actions, fiche de julien, numéro de..."/><button type="submit">Envoyer</button></form></div></div>'
+            . '<script>window.AZSA_ADMIN=' . wp_json_encode($cfg) . ';</script>'
+            . '<script>(function(){var c=window.AZSA_ADMIN||{};var t=document.getElementById("azsa-admin-thread"),f=document.getElementById("azsa-admin-form"),i=document.getElementById("azsa-admin-input"),s=document.getElementById("azsa-admin-status"),chips=document.getElementById("azsa-admin-chips"),lastRef="";function row(role,text){var r=document.createElement("div");r.className="row "+(role==="user"?"u":"b");var b=document.createElement("div");b.className="bubble";b.textContent=text||"";r.appendChild(b);t.appendChild(r);t.scrollTop=t.scrollHeight;}function setCh(arr){chips.innerHTML="";(arr||[]).forEach(function(x){var bt=document.createElement("button");bt.type="button";bt.className="chip";bt.textContent=x;bt.onclick=function(){i.value=x;f.dispatchEvent(new Event("submit",{cancelable:true}));};chips.appendChild(bt);});}async function ask(msg){var res=await fetch(c.endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({owner_id:c.owner_id,token:c.token,message:msg,last_contact_ref:lastRef})});return await res.json();}row("bot","Bonjour, je suis votre assistant CRM IA. Je peux lister les dernières actions, ouvrir une fiche contact, donner un numéro et enregistrer des notes.");setCh(["Dernières actions","Fiche du dernier contact","Numéro du dernier contact","Note pour ce contact: à rappeler demain"]);f.addEventListener("submit",async function(e){e.preventDefault();var q=(i.value||"").trim();if(!q)return;row("user",q);i.value="";s.textContent="Analyse...";try{var d=await ask(q);if(d&&d.reply){row("bot",d.reply);}else{row("bot","Je n'ai pas pu traiter la demande.");}if(d&&d.last_contact_ref){lastRef=d.last_contact_ref;}if(d&&Array.isArray(d.suggestions)){setCh(d.suggestions.slice(0,4));}s.textContent="Prêt";}catch(err){row("bot","Erreur technique temporaire.");s.textContent="Erreur";}});})();</script>'
+            . '</body></html>';
+        exit;
+    }
+
+    public static function get_admin_notes() {
+        $raw = get_option(self::OPTION_ADMIN_NOTES, array());
+        return is_array($raw) ? $raw : array();
+    }
+
+    public static function add_admin_note($owner_user_id, $contact_ref, $note_text) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $contact_ref = sanitize_text_field((string) $contact_ref);
+        $note_text = trim((string) $note_text);
+        if ($contact_ref === '' || $note_text === '') {
+            return;
+        }
+        $all = self::get_admin_notes();
+        if (!isset($all[(string) $owner_user_id]) || !is_array($all[(string) $owner_user_id])) {
+            $all[(string) $owner_user_id] = array();
+        }
+        if (!isset($all[(string) $owner_user_id][$contact_ref]) || !is_array($all[(string) $owner_user_id][$contact_ref])) {
+            $all[(string) $owner_user_id][$contact_ref] = array();
+        }
+        array_unshift($all[(string) $owner_user_id][$contact_ref], array(
+            'created_at' => gmdate('c'),
+            'text' => self::smart_trim($note_text, 1200),
+        ));
+        $all[(string) $owner_user_id][$contact_ref] = array_slice($all[(string) $owner_user_id][$contact_ref], 0, 40);
+        update_option(self::OPTION_ADMIN_NOTES, $all, false);
+    }
+
+    public static function get_contact_notes($owner_user_id, $contact_ref) {
+        $all = self::get_admin_notes();
+        return isset($all[(string) $owner_user_id][$contact_ref]) && is_array($all[(string) $owner_user_id][$contact_ref])
+            ? $all[(string) $owner_user_id][$contact_ref]
+            : array();
+    }
+
+    public static function find_contact_by_query($leads, $query, $fallback_ref = '') {
+        $query = trim((string) $query);
+        if ($fallback_ref !== '') {
+            foreach ((array) $leads as $lead) {
+                if ((string) ($lead['ref'] ?? '') === $fallback_ref) {
+                    return $lead;
+                }
+            }
+        }
+        if ($query === '') {
+            return array();
+        }
+        $needle = strtolower($query);
+        foreach ((array) $leads as $lead) {
+            $stack = strtolower(implode(' ', array(
+                (string) ($lead['ref'] ?? ''),
+                (string) ($lead['first_name'] ?? ''),
+                (string) ($lead['last_name'] ?? ''),
+                (string) ($lead['email'] ?? ''),
+            )));
+            if ($stack !== '' && strpos($stack, $needle) !== false) {
+                return $lead;
+            }
+        }
+        return array();
+    }
+
+    public static function rest_admin_assistant_chat(WP_REST_Request $request) {
+        $owner_user_id = self::normalize_owner_user_id((int) $request->get_param('owner_id'));
+        $token = sanitize_text_field((string) $request->get_param('token'));
+        if (!self::validate_admin_assistant_token($owner_user_id, $token)) {
+            return new WP_REST_Response(array('reply' => 'Accès refusé.'), 403);
+        }
+        $message = trim((string) $request->get_param('message'));
+        $last_contact_ref = sanitize_text_field((string) $request->get_param('last_contact_ref'));
+        if ($message === '') {
+            return new WP_REST_Response(array('reply' => 'Message vide.'), 400);
+        }
+
+        $leads = self::get_leads($owner_user_id);
+        $lower = strtolower($message);
+        $reply = '';
+        $suggestions = array('Dernières actions', 'Fiche du dernier contact', 'Numéro du dernier contact');
+        $out_ref = $last_contact_ref;
+
+        if (preg_match('/^note pour\s+(.+?)[\:\-]\s*(.+)$/iu', $message, $m)) {
+            $target = trim((string) $m[1]);
+            $note = trim((string) $m[2]);
+            $contact = self::find_contact_by_query($leads, $target, $last_contact_ref);
+            if (!empty($contact['ref'])) {
+                self::add_admin_note($owner_user_id, (string) $contact['ref'], $note);
+                $out_ref = (string) $contact['ref'];
+                $reply = 'Note enregistrée pour ' . trim((string) ($contact['first_name'] ?? '') . ' ' . (string) ($contact['last_name'] ?? '')) . '.';
+            } else {
+                $reply = 'Contact introuvable pour enregistrer la note.';
+            }
+        } elseif (strpos($lower, 'derni') !== false || strpos($lower, 'action') !== false || strpos($lower, 'évén') !== false || strpos($lower, 'even') !== false) {
+            $items = array_slice($leads, 0, 8);
+            if (empty($items)) {
+                $reply = 'Aucune action enregistrée pour le moment.';
+            } else {
+                $lines = array();
+                foreach ($items as $lead) {
+                    $name = trim((string) ($lead['first_name'] ?? '') . ' ' . (string) ($lead['last_name'] ?? ''));
+                    $name = $name !== '' ? $name : ((string) ($lead['email'] ?? '') !== '' ? (string) $lead['email'] : (string) ($lead['ref'] ?? ''));
+                    $date = self::format_date_short((string) ($lead['created_at'] ?? ''));
+                    $kind = !empty($lead['wants_rdv']) ? 'RDV' : 'Lead';
+                    $lines[] = '- ' . $date . ' | ' . $kind . ' | ' . $name;
+                }
+                $reply = "Dernières actions:\n" . implode("\n", $lines);
+                $out_ref = (string) ($items[0]['ref'] ?? '');
+            }
+        } elseif (strpos($lower, 'fiche') !== false || strpos($lower, 'contact') !== false || strpos($lower, 'num') !== false || strpos($lower, 'tél') !== false || strpos($lower, 'tel') !== false) {
+            $query = '';
+            if (preg_match('/([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i', $message, $em)) {
+                $query = $em[1];
+            } elseif (preg_match('/(?:de|du|pour)\s+(.+)$/iu', $message, $nm)) {
+                $query = trim((string) $nm[1]);
+            }
+            $contact = self::find_contact_by_query($leads, $query, $last_contact_ref);
+            if (empty($contact['ref'])) {
+                $reply = 'Je n’ai pas trouvé le contact demandé.';
+            } else {
+                $out_ref = (string) $contact['ref'];
+                $name = trim((string) ($contact['first_name'] ?? '') . ' ' . (string) ($contact['last_name'] ?? ''));
+                $email = (string) ($contact['email'] ?? '');
+                $phone = (string) ($contact['phone'] ?? '');
+                $kind = !empty($contact['wants_rdv']) ? 'RDV' : 'Lead';
+                $notes = self::get_contact_notes($owner_user_id, $out_ref);
+                $last_note = !empty($notes[0]['text']) ? (string) $notes[0]['text'] : 'Aucune';
+                $reply = "Fiche contact:\n"
+                    . "- Réf: " . $out_ref . "\n"
+                    . "- Nom: " . ($name !== '' ? $name : 'N/A') . "\n"
+                    . "- Email: " . ($email !== '' ? $email : 'N/A') . "\n"
+                    . "- Téléphone: " . ($phone !== '' ? $phone : 'N/A') . "\n"
+                    . "- Statut: " . $kind . "\n"
+                    . "- Dernière note: " . $last_note;
+            }
+        } else {
+            $count = count($leads);
+            $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
+            $reply = "Vue CRM rapide: " . $count . " contacts au total, dont " . $rdv . " avec RDV. "
+                . "Vous pouvez me demander: dernières actions, fiche d’un contact, numéro d’un contact, ou enregistrer une note.";
+        }
+
+        return new WP_REST_Response(array(
+            'reply' => $reply,
+            'suggestions' => $suggestions,
+            'last_contact_ref' => $out_ref,
+        ), 200);
     }
 
     public static function rest_chat(WP_REST_Request $request) {
