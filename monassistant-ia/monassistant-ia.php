@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.7.1
+ * Version: 3.7.2
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.7.1';
+    const VERSION = '3.7.2';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -3067,6 +3067,9 @@ character.onerror=function(){if(character.src!==defaultGif){character.src=defaul
 
 var lastRef=String(c.initial_last_contact_ref||''),chatSessionId=String(c.initial_session_id||''),voiceMode=false,recognizer=null,listening=false,keepListening=false,currentAudio=null,processing=false;
 var currentContact=(c.initial_current_contact&&typeof c.initial_current_contact==='object')?c.initial_current_contact:null;
+if((!lastRef||!String(lastRef).trim()) && currentContact && currentContact.ref){
+  lastRef=String(currentContact.ref);
+}
 var storageKey='azsa_admin_chat_state_v2_'+String(c.owner_id||'0');
 var chatMessages=[];
 var suggestionItems=[];
@@ -3107,6 +3110,9 @@ function restoreState(){
     chatMessages=st.messages.slice(-180);
     lastRef=String(st.last_ref||'');
     currentContact=(st.current_contact&&typeof st.current_contact==='object')?st.current_contact:null;
+    if((!lastRef||!String(lastRef).trim()) && currentContact && currentContact.ref){
+      lastRef=String(currentContact.ref);
+    }
     chatSessionId=String(st.session_id||'');
     voiceMode=!!st.voice_mode;
     suggestionItems=Array.isArray(st.suggestions)?st.suggestions.slice(0,6):[];
@@ -3316,10 +3322,15 @@ function setupRecognizer(){
   return rr;
 }
 async function ask(msg){
+  var effectiveRef=String(lastRef||'').trim();
+  if(!effectiveRef && currentContact && currentContact.ref){
+    effectiveRef=String(currentContact.ref);
+    lastRef=effectiveRef;
+  }
   var res=await fetch(c.endpoint,{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({owner_id:c.owner_id,token:c.token,message:msg,last_contact_ref:lastRef,session_id:chatSessionId})
+    body:JSON.stringify({owner_id:c.owner_id,token:c.token,message:msg,last_contact_ref:effectiveRef,session_id:chatSessionId})
   });
   return await res.json();
 }
@@ -3372,7 +3383,11 @@ form.addEventListener('submit',async function(e){
     var rep=(d&&d.reply)?d.reply:'Je n ai pas pu traiter la demande.';
     pushMessage('assistant',rep);
     if(d&&d.last_contact_ref){lastRef=d.last_contact_ref;}
-    if(d&&d.current_contact&&typeof d.current_contact==='object'){currentContact=d.current_contact; renderActiveContact(currentContact);}
+    if(d&&d.current_contact&&typeof d.current_contact==='object'){
+      currentContact=d.current_contact;
+      if(currentContact.ref){lastRef=String(currentContact.ref);}
+      renderActiveContact(currentContact);
+    }
     if(d&&d.session_id){chatSessionId=String(d.session_id);}
     if(d&&Array.isArray(d.suggestions)){setSuggestions(d.suggestions.slice(0,4));}
     saveState();
