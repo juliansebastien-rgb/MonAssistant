@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.9.1
+ * Version: 2.9.2
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.9.1';
+    const VERSION = '2.9.2';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -1362,6 +1362,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
 
     public static function rest_lead(WP_REST_Request $request) {
         $owner_user_id = self::get_runtime_owner_user_id();
+        $site_origin = esc_url_raw(home_url('/'));
         $first_name = sanitize_text_field((string) $request->get_param('first_name'));
         $last_name = sanitize_text_field((string) $request->get_param('last_name'));
         $email = sanitize_email((string) $request->get_param('email'));
@@ -1419,6 +1420,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'email' => $email,
             'phone' => $phone,
             'demand' => ($wants_rdv ? 'Souhaite un RDV téléphonique' : 'Récapitulatif'),
+            'site_origin' => $site_origin,
             'page_url' => $page_url,
             'transcript' => $transcript,
             'logo_url' => $logo_url,
@@ -1430,6 +1432,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'email' => $email,
             'phone' => $phone,
             'demand' => ($wants_rdv ? 'Souhaite un RDV téléphonique' : 'Récapitulatif'),
+            'site_origin' => $site_origin,
             'page_url' => $page_url,
             'transcript' => $transcript,
         ));
@@ -1448,6 +1451,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
                 'email' => $email,
                 'phone' => $phone,
                 'demand' => ($wants_rdv ? 'Souhaite un RDV téléphonique' : 'Récapitulatif'),
+                'site_origin' => $site_origin,
                 'page_url' => $page_url,
                 'transcript' => $transcript,
                 'logo_url' => $logo_url,
@@ -1477,6 +1481,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'Email: ' . (string) ($data['email'] ?? ''),
             'Téléphone: ' . ((string) ($data['phone'] ?? '') !== '' ? (string) $data['phone'] : 'Non renseigné'),
             'Demande: ' . (string) ($data['demand'] ?? ''),
+            'Site d’origine: ' . ((string) ($data['site_origin'] ?? '') !== '' ? (string) ($data['site_origin'] ?? '') : 'N/A'),
             'Page: ' . ((string) ($data['page_url'] ?? '') !== '' ? (string) $data['page_url'] : 'N/A'),
             '',
             'Récapitulatif de l’échange:',
@@ -1497,12 +1502,14 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         $email = esc_html((string) ($data['email'] ?? ''));
         $phone = esc_html((string) ($data['phone'] ?? ''));
         $demand = esc_html((string) ($data['demand'] ?? ''));
+        $origin = esc_url((string) ($data['site_origin'] ?? ''));
         $page = esc_url((string) ($data['page_url'] ?? ''));
         $transcript = nl2br(esc_html((string) ($data['transcript'] ?? 'Aucun message enregistré.')));
 
         $first_display = $first !== '' ? $first : 'Non renseigné';
         $last_display = $last !== '' ? $last : 'Non renseigné';
         $phone_display = $phone !== '' ? $phone : 'Non renseigné';
+        $origin_display = $origin !== '' ? '<a href="' . $origin . '">' . $origin . '</a>' : 'N/A';
         $page_display = $page !== '' ? '<a href="' . $page . '">' . $page . '</a>' : 'N/A';
         $logo_block = $logo !== '' ? '<img src="' . $logo . '" alt="Logo" style="max-height:56px; width:auto; display:block; margin:0 auto 14px;" />' : '';
 
@@ -1522,6 +1529,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             . '<tr><td style="padding:6px 0;"><strong>Email</strong></td><td style="padding:6px 0;">' . $email . '</td></tr>'
             . '<tr><td style="padding:6px 0;"><strong>Téléphone</strong></td><td style="padding:6px 0;">' . $phone_display . '</td></tr>'
             . '<tr><td style="padding:6px 0;"><strong>Demande</strong></td><td style="padding:6px 0;">' . $demand . '</td></tr>'
+            . '<tr><td style="padding:6px 0;"><strong>Site d’origine</strong></td><td style="padding:6px 0;">' . $origin_display . '</td></tr>'
             . '<tr><td style="padding:6px 0;"><strong>Page</strong></td><td style="padding:6px 0;">' . $page_display . '</td></tr>'
             . '</table>'
             . '<div style="margin-top:18px;padding:14px;border-radius:10px;background:#f5f9ff;border:1px solid rgba(18,61,100,.14);">'
