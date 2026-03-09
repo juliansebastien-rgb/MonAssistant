@@ -264,6 +264,7 @@
       panel.classList.remove('azsa-with-booking');
       bookingOpen = false;
       stopBookingPolling();
+      bookingSessionId = '';
     }
 
     function hideNudge() {
@@ -641,7 +642,15 @@
       }
       if (/^fermer calendrier$/i.test(text)) {
         closeBooking();
-        push('bot', "Calendrier fermé. On continue dans le chat.");
+        // Cancel current RDV flow entirely when visitor closes booking.
+        if (lead.stage === 'await_booking' || lead.stage === 'ask_rdv' || lead.stage === 'ask_phone_after_booking') {
+          lead.wantsRdv = false;
+          lead.rdvDetected = false;
+          if (lead.intent === 'rdv') lead.intent = 'recap';
+          lead.stage = 'none';
+        }
+        renderChips([]);
+        push('bot', "Calendrier fermé. La demande de RDV est annulée, on continue dans le chat.");
         return true;
       }
       if (/^rdv téléphonique$/i.test(text) || /^rdv telephonique$/i.test(text)) {
