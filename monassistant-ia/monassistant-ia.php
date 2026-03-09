@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.1
+ * Version: 3.6.2
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.1';
+    const VERSION = '3.6.2';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -3368,8 +3368,9 @@ HTML;
                         . "- Téléphone: " . ((string) ($contact['phone'] ?? '') !== '' ? (string) $contact['phone'] : 'N/A');
                 }
             } elseif ($ai_action === 'add_note') {
+                $is_note_request = (bool) preg_match('/\b(note|noter|ajoute|ajouter|ecris|écris|enregistre)\b/iu', $message);
                 $contact = $target !== '' ? self::find_contact_by_query($leads, $target, $last_contact_ref) : self::find_contact_by_query($leads, '', $last_contact_ref);
-                if (!empty($contact['ref']) && $ai_note !== '') {
+                if ($is_note_request && !empty($contact['ref']) && $ai_note !== '') {
                     $out_ref = (string) $contact['ref'];
                     self::add_admin_note($owner_user_id, $out_ref, $ai_note);
                     $reply = 'Note enregistrée sur la fiche en cours.';
@@ -3577,6 +3578,56 @@ HTML;
         } elseif ($reply === '' && preg_match('/\b(non|non plus|pas celle|pas la bonne|mauvaise fiche)\b/iu', $message)) {
             $reply = "Compris. Donnez le nom exact, l’email ou la référence LEAD-... du bon contact.";
             $suggestions = array('Fiche du dernier contact', 'Dernières actions');
+        } elseif ($reply === '') {
+            $plain_query = self::extract_contact_query($message);
+            $looks_like_command = (bool) preg_match('/\b(fiche|contact|numero|numéro|telephone|tel|note|ajoute|modifier|change|email|sms|whatsapp|rdv|action|historique)\b/iu', $message);
+            $looks_like_lookup = false;
+            if ($plain_query !== '') {
+                if (strpos($plain_query, '@') !== false || stripos($plain_query, 'LEAD-') === 0) {
+                    $looks_like_lookup = true;
+                } elseif (!$looks_like_command) {
+                    $token_count = count(array_values(array_filter(explode(' ', self::normalize_search_text($plain_query)))));
+                    $looks_like_lookup = $token_count >= 2;
+                }
+            }
+            if ($looks_like_lookup) {
+                $matches = self::find_contacts_by_query($leads, $plain_query, 4);
+                if (!empty($matches[0]['ref'])) {
+                    $contact = $matches[0];
+                    $out_ref = (string) $contact['ref'];
+                    $name = trim((string) ($contact['first_name'] ?? '') . ' ' . (string) ($contact['last_name'] ?? ''));
+                    $email = (string) ($contact['email'] ?? '');
+                    $phone = (string) ($contact['phone'] ?? '');
+                    $kind = !empty($contact['wants_rdv']) ? 'RDV' : 'Lead';
+                    $notes = self::get_contact_notes($owner_user_id, $out_ref);
+                    $last_note = !empty($notes[0]['text']) ? (string) $notes[0]['text'] : 'Aucune';
+                    $reply = "Fiche contact:\n"
+                        . "- Réf: " . $out_ref . "\n"
+                        . "- Nom: " . ($name !== '' ? $name : 'N/A') . "\n"
+                        . "- Email: " . ($email !== '' ? $email : 'N/A') . "\n"
+                        . "- Téléphone: " . ($phone !== '' ? $phone : 'N/A') . "\n"
+                        . "- Statut: " . $kind . "\n"
+                        . "- Dernière note: " . $last_note;
+                    if (count($matches) > 1) {
+                        $choice_refs = array();
+                        foreach ($matches as $m) {
+                            $mref = sanitize_text_field((string) ($m['ref'] ?? ''));
+                            if ($mref !== '') {
+                                $choice_refs[] = $mref;
+                            }
+                        }
+                        if (count($choice_refs) > 1) {
+                            self::set_admin_chat_state($owner_user_id, $session_id, array(
+                                'await' => 'contact_pick',
+                                'refs' => array_values(array_slice(array_unique($choice_refs), 0, 8)),
+                            ));
+                            $suggestions = array_values(array_slice(array_unique($choice_refs), 0, 4));
+                        }
+                    }
+                } else {
+                    $reply = "Je n’ai pas trouvé ce contact. Donnez le nom exact, l’email ou la référence LEAD-...";
+                }
+            }
         } elseif ($reply === '') {
             $count = count($leads);
             $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
