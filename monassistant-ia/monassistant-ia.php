@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.0.2
+ * Version: 3.0.3
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.0.2';
+    const VERSION = '3.0.3';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -1359,22 +1359,6 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             } else {
                 $reply = 'Contact introuvable pour enregistrer la note.';
             }
-        } elseif (strpos($lower, 'derni') !== false || strpos($lower, 'action') !== false || strpos($lower, 'évén') !== false || strpos($lower, 'even') !== false) {
-            $items = array_slice($leads, 0, 8);
-            if (empty($items)) {
-                $reply = 'Aucune action enregistrée pour le moment.';
-            } else {
-                $lines = array();
-                foreach ($items as $lead) {
-                    $name = trim((string) ($lead['first_name'] ?? '') . ' ' . (string) ($lead['last_name'] ?? ''));
-                    $name = $name !== '' ? $name : ((string) ($lead['email'] ?? '') !== '' ? (string) $lead['email'] : (string) ($lead['ref'] ?? ''));
-                    $date = self::format_date_short((string) ($lead['created_at'] ?? ''));
-                    $kind = !empty($lead['wants_rdv']) ? 'RDV' : 'Lead';
-                    $lines[] = '- ' . $date . ' | ' . $kind . ' | ' . $name;
-                }
-                $reply = "Dernières actions:\n" . implode("\n", $lines);
-                $out_ref = (string) ($items[0]['ref'] ?? '');
-            }
         } elseif (strpos($lower, 'fiche') !== false || strpos($lower, 'contact') !== false || strpos($lower, 'num') !== false || strpos($lower, 'tél') !== false || strpos($lower, 'tel') !== false) {
             $query = '';
             if (preg_match('/([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i', $message, $em)) {
@@ -1400,6 +1384,22 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
                     . "- Téléphone: " . ($phone !== '' ? $phone : 'N/A') . "\n"
                     . "- Statut: " . $kind . "\n"
                     . "- Dernière note: " . $last_note;
+            }
+        } elseif (strpos($lower, 'action') !== false || strpos($lower, 'évén') !== false || strpos($lower, 'even') !== false || strpos($lower, 'historique') !== false) {
+            $items = array_slice($leads, 0, 8);
+            if (empty($items)) {
+                $reply = 'Aucune action enregistrée pour le moment.';
+            } else {
+                $lines = array();
+                foreach ($items as $lead) {
+                    $name = trim((string) ($lead['first_name'] ?? '') . ' ' . (string) ($lead['last_name'] ?? ''));
+                    $name = $name !== '' ? $name : ((string) ($lead['email'] ?? '') !== '' ? (string) $lead['email'] : (string) ($lead['ref'] ?? ''));
+                    $date = self::format_date_short((string) ($lead['created_at'] ?? ''));
+                    $kind = !empty($lead['wants_rdv']) ? 'RDV' : 'Lead';
+                    $lines[] = '- ' . $date . ' | ' . $kind . ' | ' . $name;
+                }
+                $reply = "Dernières actions:\n" . implode("\n", $lines);
+                $out_ref = (string) ($items[0]['ref'] ?? '');
             }
         } else {
             $count = count($leads);
