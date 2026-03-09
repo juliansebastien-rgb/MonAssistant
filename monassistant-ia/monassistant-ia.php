@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.1.0
+ * Version: 3.1.1
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.1.0';
+    const VERSION = '3.1.1';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -774,11 +774,12 @@ final class AZSA_Plugin {
         echo '</form>';
     }
 
-    public static function render_leads_table($rows) {
+    public static function render_leads_table($rows, $mode = 'full') {
         if (empty($rows)) {
             echo '<p>Aucun enregistrement pour le moment.</p>';
             return;
         }
+        $contacts_mode = ($mode === 'contacts');
         echo '<style>
 .azsa-actions-stack{display:flex;flex-direction:column;align-items:flex-start;gap:6px;white-space:normal;min-width:170px}
 .azsa-actions-stack .button{margin:0!important}
@@ -857,28 +858,30 @@ final class AZSA_Plugin {
             }
             echo '</td>';
             echo '<td><div class="azsa-actions-stack">';
-            if ($callback_status !== 'open') {
-                echo '<a class="button button-small" href="' . esc_url($open_url) . '">Créer tâche rappel</a>';
-            }
-            if ($callback_status === 'open') {
-                echo '<a class="button button-small" href="' . esc_url($done_url) . '">Rappel fait</a>';
-            }
-            if ($callback_status !== '') {
-                echo '<a class="button button-small" href="' . esc_url($clear_url) . '">Retirer</a>';
-            }
-            if ($email_raw !== '') {
-                echo '<a class="button button-small" href="mailto:' . esc_attr($email_raw) . '">Email</a>';
-                echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier email" data-copy="' . esc_attr($email_raw) . '">Copier email</button>';
-            }
-            if ($phone_raw !== '') {
-                echo '<a class="button button-small" href="tel:' . esc_attr($phone_raw) . '">Appeler</a>';
-                echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier tél" data-copy="' . esc_attr($phone_raw) . '">Copier tél</button>';
-            }
-            if ($transcript !== '') {
-                echo '<details class="azsa-transcript"><summary class="button button-small" style="cursor:pointer;">Transcript</summary><div class="azsa-transcript-panel">' . $transcript . '</div></details>';
-            }
             echo '<a class="button button-small button-primary" href="' . esc_url($view_url) . '">Voir la fiche</a>';
-            echo '<a class="button button-small" style="border-color:#b32d2e;color:#b32d2e;" href="' . esc_url($delete_url) . '" onclick="return confirm(\'Supprimer définitivement cet enregistrement ?\');">Supprimer</a>';
+            if (!$contacts_mode) {
+                if ($callback_status !== 'open') {
+                    echo '<a class="button button-small" href="' . esc_url($open_url) . '">Créer tâche rappel</a>';
+                }
+                if ($callback_status === 'open') {
+                    echo '<a class="button button-small" href="' . esc_url($done_url) . '">Rappel fait</a>';
+                }
+                if ($callback_status !== '') {
+                    echo '<a class="button button-small" href="' . esc_url($clear_url) . '">Retirer</a>';
+                }
+                if ($email_raw !== '') {
+                    echo '<a class="button button-small" href="mailto:' . esc_attr($email_raw) . '">Email</a>';
+                    echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier email" data-copy="' . esc_attr($email_raw) . '">Copier email</button>';
+                }
+                if ($phone_raw !== '') {
+                    echo '<a class="button button-small" href="tel:' . esc_attr($phone_raw) . '">Appeler</a>';
+                    echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier tél" data-copy="' . esc_attr($phone_raw) . '">Copier tél</button>';
+                }
+                if ($transcript !== '') {
+                    echo '<details class="azsa-transcript"><summary class="button button-small" style="cursor:pointer;">Transcript</summary><div class="azsa-transcript-panel">' . $transcript . '</div></details>';
+                }
+                echo '<a class="button button-small" style="border-color:#b32d2e;color:#b32d2e;" href="' . esc_url($delete_url) . '" onclick="return confirm(\'Supprimer définitivement cet enregistrement ?\');">Supprimer</a>';
+            }
             echo '</div></td>';
             echo '</tr>';
         }
@@ -984,7 +987,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         echo '<p><strong>Total base:</strong> ' . (int) count($all_leads) . '</p>';
         echo '<p><strong>Total affiché:</strong> ' . (int) count($leads) . '</p>';
         self::render_leads_filters_form('azsa-prospects', $filters);
-        self::render_leads_table($leads);
+        self::render_leads_table($leads, 'contacts');
         echo '</div>';
     }
 
@@ -1145,16 +1148,23 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             echo '<p>Aucun événement pour ce contact.</p></div>';
             return;
         }
-        echo '<table class="widefat striped"><thead><tr><th>Date</th><th>Acteur</th><th>Type</th><th>Détail</th></tr></thead><tbody>';
+        echo '<div style="display:flex;flex-direction:column;gap:10px;max-width:960px;">';
         foreach ($timeline as $ev) {
-            echo '<tr>';
-            echo '<td>' . esc_html(self::format_date_short((string) ($ev['created_at'] ?? ''))) . '</td>';
-            echo '<td>' . esc_html((string) ($ev['actor'] ?? '')) . '</td>';
-            echo '<td>' . esc_html((string) ($ev['event_type'] ?? '')) . '</td>';
-            echo '<td>' . esc_html(self::event_data_to_text($ev)) . '</td>';
-            echo '</tr>';
+            $data_text = self::event_data_to_text($ev);
+            echo '<article style="background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:12px 14px;box-shadow:0 1px 2px rgba(0,0,0,.03);">';
+            echo '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 6px;">';
+            echo '<span style="font-weight:700;color:#123d64;">' . esc_html((string) ($ev['event_type'] ?? '')) . '</span>';
+            echo '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#f0f4f8;color:#29455f;font-size:12px;">' . esc_html((string) ($ev['actor'] ?? '')) . '</span>';
+            echo '<span style="color:#637b93;font-size:12px;">' . esc_html(self::format_date_short((string) ($ev['created_at'] ?? ''))) . '</span>';
+            echo '</div>';
+            if ($data_text !== '') {
+                echo '<div style="color:#1f2f3d;line-height:1.45;">' . esc_html($data_text) . '</div>';
+            } else {
+                echo '<div style="color:#6b7280;line-height:1.45;">Aucun détail complémentaire.</div>';
+            }
+            echo '</article>';
         }
-        echo '</tbody></table>';
+        echo '</div>';
         echo "<script>
 document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
   btn.addEventListener('click', function(){
@@ -2099,26 +2109,25 @@ HTML;
 
     public static function find_contact_by_query($leads, $query, $fallback_ref = '') {
         $query = trim((string) $query);
+        if ($query !== '') {
+            $needle = strtolower($query);
+            foreach ((array) $leads as $lead) {
+                $stack = strtolower(implode(' ', array(
+                    (string) ($lead['ref'] ?? ''),
+                    (string) ($lead['first_name'] ?? ''),
+                    (string) ($lead['last_name'] ?? ''),
+                    (string) ($lead['email'] ?? ''),
+                )));
+                if ($stack !== '' && strpos($stack, $needle) !== false) {
+                    return $lead;
+                }
+            }
+        }
         if ($fallback_ref !== '') {
             foreach ((array) $leads as $lead) {
                 if ((string) ($lead['ref'] ?? '') === $fallback_ref) {
                     return $lead;
                 }
-            }
-        }
-        if ($query === '') {
-            return array();
-        }
-        $needle = strtolower($query);
-        foreach ((array) $leads as $lead) {
-            $stack = strtolower(implode(' ', array(
-                (string) ($lead['ref'] ?? ''),
-                (string) ($lead['first_name'] ?? ''),
-                (string) ($lead['last_name'] ?? ''),
-                (string) ($lead['email'] ?? ''),
-            )));
-            if ($stack !== '' && strpos($stack, $needle) !== false) {
-                return $lead;
             }
         }
         return array();
