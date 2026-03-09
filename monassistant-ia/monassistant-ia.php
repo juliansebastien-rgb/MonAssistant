@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.0
+ * Version: 3.6.1
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.0';
+    const VERSION = '3.6.1';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -2638,6 +2638,15 @@ HTML;
 
     public static function find_contact_by_query($leads, $query, $fallback_ref = '') {
         $query = trim((string) $query);
+        if ($query !== '' && preg_match('/\b(LEAD-[A-Z0-9\-]+)\b/i', $query, $rm)) {
+            $ref_query = strtoupper(trim((string) $rm[1]));
+            foreach ((array) $leads as $lead) {
+                $lead_ref = strtoupper(trim((string) ($lead['ref'] ?? '')));
+                if ($lead_ref !== '' && $lead_ref === $ref_query) {
+                    return $lead;
+                }
+            }
+        }
         if ($query !== '') {
             $needle = strtolower($query);
             foreach ((array) $leads as $lead) {
@@ -2681,6 +2690,9 @@ HTML;
         if ($message === '') {
             return '';
         }
+        if (preg_match('/\b(LEAD-[A-Z0-9\-]+)\b/i', $message, $rm)) {
+            return strtoupper(trim((string) $rm[1]));
+        }
         if (preg_match('/([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i', $message, $em)) {
             return trim((string) $em[1]);
         }
@@ -2695,6 +2707,15 @@ HTML;
         $query = self::normalize_search_text($query);
         if ($query === '') {
             return array();
+        }
+        if (preg_match('/\blead-[a-z0-9\-]+\b/i', $query, $rm)) {
+            $ref_query = strtoupper((string) $rm[0]);
+            foreach ((array) $leads as $lead) {
+                $ref = strtoupper(trim((string) ($lead['ref'] ?? '')));
+                if ($ref !== '' && $ref === $ref_query) {
+                    return array($lead);
+                }
+            }
         }
         $tokens = array_values(array_filter(explode(' ', $query), function ($t) {
             return strlen((string) $t) >= 2;
@@ -2726,8 +2747,23 @@ HTML;
             if ($name_n !== '' && $query === $name_n) {
                 $score += 100;
             }
+            if ($name_n !== '' && strpos($name_n, $query) !== false) {
+                $score += 80;
+            }
             if (strpos($stack, $query) !== false) {
                 $score += 60;
+            }
+            if ($name_n !== '' && !empty($tokens)) {
+                $name_tokens_match = 0;
+                foreach ($tokens as $tk) {
+                    if (strpos($name_n, $tk) !== false) {
+                        $name_tokens_match++;
+                        $score += 14;
+                    }
+                }
+                if ($name_tokens_match === count($tokens)) {
+                    $score += 35;
+                }
             }
             foreach ($tokens as $tk) {
                 if (strpos($stack, $tk) !== false) {
@@ -2916,6 +2952,57 @@ HTML;
             self::log_event($owner_user_id, 'admin', $important_event_type, array(
                 'message' => self::smart_trim($message, 240),
             ), $session_id, $last_contact_ref);
+        }
+
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'contact_pick' && !empty($admin_state['refs']) && is_array($admin_state['refs'])) {
+            $choice_refs = array_values(array_filter(array_map('sanitize_text_field', (array) $admin_state['refs'])));
+            $contact = array();
+            if (preg_match('/\b(LEAD-[A-Z0-9\-]+)\b/i', $message, $rm)) {
+                $picked_ref = strtoupper((string) $rm[1]);
+                if (in_array($picked_ref, array_map('strtoupper', $choice_refs), true)) {
+                    $contact = self::find_contact_by_query($leads, $picked_ref, $picked_ref);
+                }
+            }
+            if (empty($contact['ref']) && !self::text_is_no($message)) {
+                $q = self::extract_contact_query($message);
+                if ($q === '') {
+                    $q = trim((string) $message);
+                }
+                if ($q !== '') {
+                    $matches = self::find_contacts_by_query($leads, $q, 5);
+                    foreach ($matches as $m) {
+                        $refm = sanitize_text_field((string) ($m['ref'] ?? ''));
+                        if ($refm !== '' && in_array($refm, $choice_refs, true)) {
+                            $contact = $m;
+                            break;
+                        }
+                    }
+                    if (empty($contact['ref']) && count($matches) === 1) {
+                        $contact = $matches[0];
+                    }
+                }
+            }
+
+            if (!empty($contact['ref'])) {
+                $out_ref = (string) $contact['ref'];
+                $name = trim((string) ($contact['first_name'] ?? '') . ' ' . (string) ($contact['last_name'] ?? ''));
+                $email = (string) ($contact['email'] ?? '');
+                $phone = (string) ($contact['phone'] ?? '');
+                $kind = !empty($contact['wants_rdv']) ? 'RDV' : 'Lead';
+                $notes = self::get_contact_notes($owner_user_id, $out_ref);
+                $last_note = !empty($notes[0]['text']) ? (string) $notes[0]['text'] : 'Aucune';
+                $reply = "Fiche contact:\n"
+                    . "- Réf: " . $out_ref . "\n"
+                    . "- Nom: " . ($name !== '' ? $name : 'N/A') . "\n"
+                    . "- Email: " . ($email !== '' ? $email : 'N/A') . "\n"
+                    . "- Téléphone: " . ($phone !== '' ? $phone : 'N/A') . "\n"
+                    . "- Statut: " . $kind . "\n"
+                    . "- Dernière note: " . $last_note;
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+            } else {
+                $reply = "D’accord. Choisissez la bonne fiche avec sa référence LEAD-... : " . implode(', ', array_slice($choice_refs, 0, 6)) . ".";
+                $suggestions = array_slice($choice_refs, 0, 4);
+            }
         }
 
         if ($reply === '' && (preg_match('/\\b(appel|appeler|appelez|telephone|t[eé]l)\\b/iu', $message) || preg_match('/\\bcoup\\s+de\\s+fil\\b/iu', $message)) && !preg_match('/\\b(recu|reçu|entrant)\\b/iu', $message)) {
@@ -3446,6 +3533,13 @@ HTML;
 
                 if (!empty($matches) && count($matches) > 1) {
                     $alts = array();
+                    $choice_refs = array();
+                    foreach ($matches as $m) {
+                        $mref = sanitize_text_field((string) ($m['ref'] ?? ''));
+                        if ($mref !== '') {
+                            $choice_refs[] = $mref;
+                        }
+                    }
                     foreach (array_slice($matches, 1, 3) as $m) {
                         $alt_name = trim((string) ($m['first_name'] ?? '') . ' ' . (string) ($m['last_name'] ?? ''));
                         $alt_email = (string) ($m['email'] ?? '');
@@ -3453,7 +3547,14 @@ HTML;
                         $alts[] = '- ' . ($alt_name !== '' ? $alt_name : 'N/A') . ' | ' . ($alt_email !== '' ? $alt_email : 'N/A') . ' | ' . $alt_ref;
                     }
                     if (!empty($alts)) {
-                        $reply .= "\n\nAutres fiches proches:\n" . implode("\n", $alts);
+                        $reply .= "\n\nAutres fiches proches:\n" . implode("\n", $alts) . "\n\nRépondez avec la référence LEAD-... pour changer de fiche.";
+                    }
+                    if (count($choice_refs) > 1) {
+                        self::set_admin_chat_state($owner_user_id, $session_id, array(
+                            'await' => 'contact_pick',
+                            'refs' => array_values(array_slice(array_unique($choice_refs), 0, 8)),
+                        ));
+                        $suggestions = array_values(array_slice(array_unique($choice_refs), 0, 4));
                     }
                 }
             }
@@ -3473,6 +3574,9 @@ HTML;
                 $reply = "Dernières actions:\n" . implode("\n", $lines);
                 $out_ref = (string) ($items[0]['ref'] ?? '');
             }
+        } elseif ($reply === '' && preg_match('/\b(non|non plus|pas celle|pas la bonne|mauvaise fiche)\b/iu', $message)) {
+            $reply = "Compris. Donnez le nom exact, l’email ou la référence LEAD-... du bon contact.";
+            $suggestions = array('Fiche du dernier contact', 'Dernières actions');
         } elseif ($reply === '') {
             $count = count($leads);
             $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
