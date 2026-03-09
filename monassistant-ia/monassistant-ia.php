@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.7.3
+ * Version: 3.8.0
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.7.3';
+    const VERSION = '3.8.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -1088,6 +1088,58 @@ final class AZSA_Plugin {
         return true;
     }
 
+    public static function get_admin_nlu_non_regression_cases() {
+        return array(
+            array('msg' => 'donne moi la fiche de Julien Sebastien', 'expect' => 'get_contact'),
+            array('msg' => 'je veux la fiche LEAD-20260308-184014-DwZz', 'expect' => 'get_contact'),
+            array('msg' => 'numéro du contact', 'expect' => 'get_contact'),
+            array('msg' => 'change de fiche', 'expect' => 'get_contact'),
+            array('msg' => 'modifie le numéro de téléphone', 'expect' => 'update_phone'),
+            array('msg' => 'mettre à jour le tel', 'expect' => 'update_phone'),
+            array('msg' => 'ajoute une note', 'expect' => 'add_note'),
+            array('msg' => 'enregistre une note sur cette fiche', 'expect' => 'add_note'),
+            array('msg' => 'donne les dernières actions', 'expect' => 'list_actions'),
+            array('msg' => 'historique des actions', 'expect' => 'list_actions'),
+            array('msg' => 'montre les derniers événements', 'expect' => 'list_events'),
+            array('msg' => 'logs du contact', 'expect' => 'list_events'),
+            array('msg' => 'vue crm rapide', 'expect' => 'summary'),
+            array('msg' => 'fais un résumé', 'expect' => 'summary'),
+            array('msg' => 'j ai recu un sms', 'expect' => 'unknown'),
+            array('msg' => 'j ai reçu un email', 'expect' => 'unknown'),
+            array('msg' => 'envoie un sms', 'expect' => 'unknown'),
+            array('msg' => 'envoie un email', 'expect' => 'unknown'),
+            array('msg' => 'appelle le contact', 'expect' => 'unknown'),
+            array('msg' => 'bonjour', 'expect' => 'unknown'),
+        );
+    }
+
+    public static function run_admin_nlu_non_regression_tests() {
+        $cases = self::get_admin_nlu_non_regression_cases();
+        $rows = array();
+        $ok = 0;
+        foreach ($cases as $c) {
+            $msg = (string) ($c['msg'] ?? '');
+            $expect = (string) ($c['expect'] ?? 'unknown');
+            $got = (string) (self::local_admin_intent($msg)['action'] ?? 'unknown');
+            $pass = ($got === $expect);
+            if ($pass) {
+                $ok++;
+            }
+            $rows[] = array(
+                'msg' => $msg,
+                'expect' => $expect,
+                'got' => $got,
+                'pass' => $pass,
+            );
+        }
+        return array(
+            'total' => count($cases),
+            'ok' => $ok,
+            'ko' => max(0, count($cases) - $ok),
+            'rows' => $rows,
+        );
+    }
+
     public static function render_ai_rules_page() {
         if (!current_user_can('manage_options')) {
             return;
@@ -1127,6 +1179,13 @@ final class AZSA_Plugin {
             self::analyze_ai_rules_coherence($settings);
             echo '<div class="notice notice-success"><p>Analyse de cohérence terminée.</p></div>';
         }
+        $tests_result = null;
+        if (isset($_POST['azsa_run_nlu_tests']) && check_admin_referer('azsa_run_nlu_tests_nonce', 'azsa_run_nlu_tests_nonce')) {
+            $tests_result = self::run_admin_nlu_non_regression_tests();
+            if (is_array($tests_result)) {
+                echo '<div class="notice notice-info"><p>Tests NLU exécutés: ' . (int) ($tests_result['ok'] ?? 0) . '/' . (int) ($tests_result['total'] ?? 0) . ' OK.</p></div>';
+            }
+        }
 
         $rulebook = self::get_ai_rulebook();
         $suggestions = self::get_ai_rule_suggestions();
@@ -1140,6 +1199,10 @@ final class AZSA_Plugin {
         echo '<form method="post" style="margin:0 0 16px;">';
         wp_nonce_field('azsa_analyze_rules_nonce', 'azsa_analyze_rules_nonce');
         echo '<button type="submit" name="azsa_analyze_rules" class="button">Analyser la cohérence</button>';
+        echo '</form>';
+        echo '<form method="post" style="margin:0 0 16px;">';
+        wp_nonce_field('azsa_run_nlu_tests_nonce', 'azsa_run_nlu_tests_nonce');
+        echo '<button type="submit" name="azsa_run_nlu_tests" class="button">Lancer les 20 tests NLU</button>';
         echo '</form>';
 
         echo '<h2>Liste des règles</h2>';
@@ -1188,6 +1251,20 @@ final class AZSA_Plugin {
                 echo '<td>' . esc_html(implode(', ', (array) ($s['rule_ids'] ?? array()))) . '</td>';
                 echo '<td>' . esc_html((string) ($s['proposed_text'] ?? '')) . '</td>';
                 echo '<td><a class="button button-small button-primary" href="' . esc_url($apply) . '">Appliquer</a></td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
+        if (is_array($tests_result)) {
+            echo '<h2 style="margin-top:20px;">Résultats tests NLU</h2>';
+            echo '<table class="widefat striped"><thead><tr><th>Message</th><th>Attendu</th><th>Obtenu</th><th>Statut</th></tr></thead><tbody>';
+            foreach ((array) ($tests_result['rows'] ?? array()) as $row) {
+                $pass = !empty($row['pass']);
+                echo '<tr>';
+                echo '<td>' . esc_html((string) ($row['msg'] ?? '')) . '</td>';
+                echo '<td>' . esc_html((string) ($row['expect'] ?? '')) . '</td>';
+                echo '<td>' . esc_html((string) ($row['got'] ?? '')) . '</td>';
+                echo '<td>' . ($pass ? '<strong style="color:#0a7f2e;">OK</strong>' : '<strong style="color:#b42318;">KO</strong>') . '</td>';
                 echo '</tr>';
             }
             echo '</tbody></table>';
@@ -2045,6 +2122,42 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         $has_whatsapp = (strpos($m, 'whatsapp') !== false || strpos($m, 'whats app') !== false || strpos($m, 'whatsap') !== false);
         $has_action = (bool) preg_match('/\b(envoi|envoyer|envoie|ecris|ecrit|redige|r[eé]dige|message)\b/u', $m);
         return $has_whatsapp && $has_action;
+    }
+
+    public static function local_admin_intent($message) {
+        $m = self::normalize_search_text($message);
+        $action = 'unknown';
+        if (preg_match('/\b(derniere|dernieres|actions|historique)\b/u', $m)) {
+            $action = 'list_actions';
+        } elseif (preg_match('/\b(evenement|evenements|events|logs)\b/u', $m)) {
+            $action = 'list_events';
+        } elseif (preg_match('/\b(note|noter|ajoute|ajouter|enregistre)\b/u', $m)) {
+            $action = 'add_note';
+        } elseif (preg_match('/\b(modif|modifier|change|changer|mettre a jour)\b/u', $m) && preg_match('/\b(numero|telephone|tel)\b/u', $m)) {
+            $action = 'update_phone';
+        } elseif (preg_match('/\b(fiche|contact|numero|telephone|tel)\b/u', $m)) {
+            $action = 'get_contact';
+        } elseif (preg_match('/\b(vue crm|resume|synthese|summary)\b/u', $m)) {
+            $action = 'summary';
+        }
+        return array(
+            'action' => $action,
+            'target' => self::extract_contact_query($message),
+            'note' => '',
+            'phone' => '',
+        );
+    }
+
+    public static function is_confident_contact_match($matches, $min_score = 90, $min_gap = 18) {
+        if (empty($matches) || !is_array($matches)) {
+            return false;
+        }
+        $top = (int) ($matches[0]['_score'] ?? 0);
+        $second = isset($matches[1]) ? (int) ($matches[1]['_score'] ?? 0) : 0;
+        if ($top < (int) $min_score) {
+            return false;
+        }
+        return ($top - $second) >= (int) $min_gap;
     }
 
     public static function get_contact_timeline($owner_user_id, $lead) {
@@ -3824,7 +3937,7 @@ HTML;
         }
         $q = self::normalize_search_text($message);
         // Remove intent words so we keep only potential contact identifiers.
-        $q = preg_replace('/\b(donne|moi|la|le|les|fiche|du|de|des|contact|numero|numeros|numeros|telephone|tel|stp|svp|pour|du|d|appel|appelle|appelles|appeler|appelez)\b/', ' ', (string) $q);
+        $q = preg_replace('/\b(donne|moi|la|le|les|fiche|du|de|des|contact|numero|numeros|telephone|tel|stp|svp|pour|d|appel|appelle|appelles|appeler|appelez|change|changer|modifie|modifier|non|pas|bonne|mauvaise|celle)\b/', ' ', (string) $q);
         $q = preg_replace('/\s+/', ' ', (string) $q);
         return trim((string) $q);
     }
@@ -4165,6 +4278,15 @@ HTML;
         $ai_target = (string) ($ai_intent['target'] ?? '');
         $ai_note = (string) ($ai_intent['note'] ?? '');
         $ai_phone = preg_replace('/[^0-9+\s().-]/', '', (string) ($ai_intent['phone'] ?? ''));
+        if ($ai_action === '' || $ai_action === 'unknown') {
+            $local_intent = self::local_admin_intent($message);
+            if (!empty($local_intent['action']) && (string) $local_intent['action'] !== 'unknown') {
+                $ai_action = (string) $local_intent['action'];
+                $ai_target = (string) ($local_intent['target'] ?? '');
+                $ai_note = (string) ($local_intent['note'] ?? '');
+                $ai_phone = preg_replace('/[^0-9+\s().-]/', '', (string) ($local_intent['phone'] ?? ''));
+            }
+        }
         $important_event_type = self::detect_important_intent_event($message, $ai_action);
         if ($important_event_type !== '') {
             self::log_event($owner_user_id, 'admin', $important_event_type, array(
@@ -4448,6 +4570,99 @@ HTML;
             }
         }
 
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'inbound_event_target' && !empty($admin_state['event_type'])) {
+            $event_type = sanitize_key((string) $admin_state['event_type']);
+            $query = self::extract_contact_query($message);
+            $contact = array();
+            if ($query !== '') {
+                $matches = self::find_contacts_by_query($leads, $query, 3);
+                if (count($matches) === 1) {
+                    $contact = $matches[0];
+                } elseif (count($matches) > 1) {
+                    $alts = array();
+                    foreach ($matches as $m) {
+                        $alts[] = (string) ($m['ref'] ?? '');
+                    }
+                    $reply = "J’ai trouvé plusieurs fiches possibles (" . implode(', ', array_filter($alts)) . "). Quelle référence voulez-vous ?";
+                    $suggestions = array_slice(array_filter($alts), 0, 4);
+                }
+            }
+            if ($reply === '' && empty($contact['ref']) && $last_contact_ref !== '') {
+                $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
+            }
+            if ($reply === '') {
+                if (empty($contact['ref'])) {
+                    $reply = "Je n’ai pas trouvé ce contact. Donnez le nom, l’email ou la référence LEAD-...";
+                } else {
+                    $out_ref = (string) $contact['ref'];
+                    self::set_admin_chat_state($owner_user_id, $session_id, array(
+                        'await' => 'inbound_event_content',
+                        'event_type' => $event_type,
+                        'ref' => $out_ref,
+                    ));
+                    $reply = "Parfait, fiche " . $out_ref . ". Quel contenu avez-vous reçu ?";
+                }
+            }
+        }
+
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'inbound_event_content' && !empty($admin_state['event_type']) && !empty($admin_state['ref'])) {
+            $event_type = sanitize_key((string) $admin_state['event_type']);
+            $target_ref = sanitize_text_field((string) $admin_state['ref']);
+            if (self::text_is_no($message) || preg_match('/\\b(annule|annuler|ignore|plus tard)\\b/iu', $message)) {
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $reply = "D’accord, enregistrement annulé.";
+            } else {
+                self::log_event($owner_user_id, 'admin', $event_type, array(
+                    'message' => self::smart_trim($message, 500),
+                ), $session_id, $target_ref);
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $out_ref = $target_ref;
+                $reply = "Événement reçu enregistré sur la fiche " . $target_ref . ".";
+            }
+        }
+
+        if ($reply === '' && preg_match('/\\b(recu|reçu|recut|entrant)\\b/iu', $message) && preg_match('/\\b(sms|email|mail|whatsapp|appel)\\b/iu', $message) && !preg_match('/[:\\-]/u', $message)) {
+            $mnorm = self::normalize_search_text($message);
+            $event_type = '';
+            if (strpos($mnorm, 'sms') !== false) {
+                $event_type = 'sms_received';
+            } elseif (strpos($mnorm, 'email') !== false || strpos($mnorm, 'mail') !== false) {
+                $event_type = 'email_received';
+            } elseif (strpos($mnorm, 'whatsapp') !== false || strpos($mnorm, 'whats app') !== false) {
+                $event_type = 'whatsapp_received';
+            } elseif (strpos($mnorm, 'appel') !== false) {
+                $event_type = 'call_inbound';
+            }
+            if ($event_type !== '') {
+                $query = self::extract_contact_query($message);
+                $contact = array();
+                if ($query !== '') {
+                    $matches = self::find_contacts_by_query($leads, $query, 1);
+                    if (!empty($matches[0])) {
+                        $contact = $matches[0];
+                    }
+                }
+                if (empty($contact['ref']) && $last_contact_ref !== '') {
+                    $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
+                }
+                if (empty($contact['ref'])) {
+                    self::set_admin_chat_state($owner_user_id, $session_id, array(
+                        'await' => 'inbound_event_target',
+                        'event_type' => $event_type,
+                    ));
+                    $reply = "Sur quelle fiche voulez-vous enregistrer ce message reçu ?";
+                } else {
+                    $out_ref = (string) $contact['ref'];
+                    self::set_admin_chat_state($owner_user_id, $session_id, array(
+                        'await' => 'inbound_event_content',
+                        'event_type' => $event_type,
+                        'ref' => $out_ref,
+                    ));
+                    $reply = "Message reçu détecté pour " . $out_ref . ". Quel est le contenu exact à enregistrer ?";
+                }
+            }
+        }
+
         if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'call_report' && !empty($admin_state['ref'])) {
             $target_ref = sanitize_text_field((string) $admin_state['ref']);
             if (self::text_is_no($message) || preg_match('/\\b(annule|annuler|ignore|plus tard)\\b/iu', $message)) {
@@ -4517,7 +4732,7 @@ HTML;
                     $contact = $matches[0];
                 }
             }
-            if (empty($contact['ref']) && $last_contact_ref !== '') {
+            if (empty($contact['ref']) && $query === '' && $last_contact_ref !== '') {
                 $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
             }
             if (empty($contact['ref'])) {
@@ -4850,14 +5065,35 @@ HTML;
             $matches = array();
             if ($query !== '') {
                 $matches = self::find_contacts_by_query($leads, $query, 4);
-                if (!empty($matches[0])) {
+                if (!empty($matches[0]) && self::is_confident_contact_match($matches, 88, 14)) {
                     $contact = $matches[0];
                 }
             }
             if (empty($contact['ref']) && $last_contact_ref !== '') {
                 $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
             }
-            if (empty($contact['ref'])) {
+            if (empty($contact['ref']) && !empty($matches)) {
+                $alts = array();
+                $choice_refs = array();
+                foreach ($matches as $m) {
+                    $mref = sanitize_text_field((string) ($m['ref'] ?? ''));
+                    if ($mref !== '') {
+                        $choice_refs[] = $mref;
+                    }
+                    $mname = trim((string) ($m['first_name'] ?? '') . ' ' . (string) ($m['last_name'] ?? ''));
+                    $memail = (string) ($m['email'] ?? '');
+                    $alts[] = '- ' . ($mname !== '' ? $mname : 'N/A') . ' | ' . ($memail !== '' ? $memail : 'N/A') . ' | ' . $mref;
+                }
+                $reply = "J’ai trouvé plusieurs contacts possibles:\n" . implode("\n", $alts)
+                    . "\n\nRépondez avec la référence LEAD-... pour choisir.";
+                if (count($choice_refs) > 1) {
+                    self::set_admin_chat_state($owner_user_id, $session_id, array(
+                        'await' => 'contact_pick',
+                        'refs' => array_values(array_slice(array_unique($choice_refs), 0, 8)),
+                    ));
+                    $suggestions = array_values(array_slice(array_unique($choice_refs), 0, 4));
+                }
+            } elseif (empty($contact['ref'])) {
                 $reply = 'Je n’ai pas trouvé le contact demandé.';
             } else {
                 $out_ref = (string) $contact['ref'];
@@ -4918,9 +5154,62 @@ HTML;
                 $reply = "Dernières actions:\n" . implode("\n", $lines);
                 $out_ref = (string) ($items[0]['ref'] ?? '');
             }
-        } elseif ($reply === '' && preg_match('/\b(non|non plus|pas celle|pas la bonne|mauvaise fiche)\b/iu', $message)) {
-            $reply = "Compris. Donnez le nom exact, l’email ou la référence LEAD-... du bon contact.";
-            $suggestions = array('Fiche du dernier contact', 'Dernières actions');
+        } elseif (
+            $reply === ''
+            && preg_match('/\b(non|non plus|pas celle|pas la bonne|mauvaise fiche|change de fiche)\b/iu', $message)
+            && preg_match('/\b(fiche|contact|celle|nom|liste|avec|de)\b/iu', $message)
+        ) {
+            $query = self::extract_contact_query($message);
+            $query_norm = self::normalize_search_text($query);
+            $query_norm = preg_replace('/\b(non|plus|pas|celle|ce|cette|bonne|mauvaise|fiche|contact|contacts|nom|liste|avec|donne|moi|la|le|les|de|du|des|est|n|e)\b/', ' ', (string) $query_norm);
+            $query_norm = trim((string) preg_replace('/\s+/', ' ', (string) $query_norm));
+
+            if ($query_norm !== '') {
+                $matches = self::find_contacts_by_query($leads, $query_norm, 6);
+                if (count($matches) === 1) {
+                    $contact = $matches[0];
+                    $out_ref = (string) ($contact['ref'] ?? '');
+                    $name = trim((string) ($contact['first_name'] ?? '') . ' ' . (string) ($contact['last_name'] ?? ''));
+                    $email = (string) ($contact['email'] ?? '');
+                    $phone = (string) ($contact['phone'] ?? '');
+                    $kind = !empty($contact['wants_rdv']) ? 'RDV' : 'Lead';
+                    $notes = self::get_contact_notes($owner_user_id, $out_ref);
+                    $last_note = !empty($notes[0]['text']) ? (string) $notes[0]['text'] : 'Aucune';
+                    $reply = "Fiche contact:\n"
+                        . "- Réf: " . $out_ref . "\n"
+                        . "- Nom: " . ($name !== '' ? $name : 'N/A') . "\n"
+                        . "- Email: " . ($email !== '' ? $email : 'N/A') . "\n"
+                        . "- Téléphone: " . ($phone !== '' ? $phone : 'N/A') . "\n"
+                        . "- Statut: " . $kind . "\n"
+                        . "- Dernière note: " . $last_note;
+                } elseif (count($matches) > 1) {
+                    $lines = array();
+                    $choice_refs = array();
+                    foreach ($matches as $m) {
+                        $mref = sanitize_text_field((string) ($m['ref'] ?? ''));
+                        if ($mref !== '') {
+                            $choice_refs[] = $mref;
+                        }
+                        $mname = trim((string) ($m['first_name'] ?? '') . ' ' . (string) ($m['last_name'] ?? ''));
+                        $memail = (string) ($m['email'] ?? '');
+                        $lines[] = '- ' . ($mname !== '' ? $mname : 'N/A') . ' | ' . ($memail !== '' ? $memail : 'N/A') . ' | ' . $mref;
+                    }
+                    $reply = "J’ai trouvé plusieurs contacts possibles:\n" . implode("\n", $lines)
+                        . "\n\nRépondez avec la référence LEAD-... pour changer de fiche.";
+                    if (count($choice_refs) > 1) {
+                        self::set_admin_chat_state($owner_user_id, $session_id, array(
+                            'await' => 'contact_pick',
+                            'refs' => array_values(array_slice(array_unique($choice_refs), 0, 8)),
+                        ));
+                        $suggestions = array_values(array_slice(array_unique($choice_refs), 0, 4));
+                    }
+                } else {
+                    $reply = "Je n’ai pas trouvé de contact correspondant à \"" . $query_norm . "\". Donnez le nom exact, l’email ou la référence LEAD-...";
+                }
+            } else {
+                $reply = "Compris. Donnez le nom exact, l’email ou la référence LEAD-... du bon contact.";
+                $suggestions = array('Fiche du dernier contact', 'Dernières actions');
+            }
         } elseif ($reply === '') {
             $plain_query = self::extract_contact_query($message);
             $looks_like_command = (bool) preg_match('/\b(fiche|contact|numero|numéro|telephone|tel|note|ajoute|modifier|change|email|sms|whatsapp|rdv|action|historique)\b/iu', $message);
@@ -4935,7 +5224,7 @@ HTML;
             }
             if ($looks_like_lookup) {
                 $matches = self::find_contacts_by_query($leads, $plain_query, 4);
-                if (!empty($matches[0]['ref'])) {
+                if (!empty($matches[0]['ref']) && self::is_confident_contact_match($matches, 88, 14)) {
                     $contact = $matches[0];
                     $out_ref = (string) $contact['ref'];
                     $name = trim((string) ($contact['first_name'] ?? '') . ' ' . (string) ($contact['last_name'] ?? ''));
@@ -4967,19 +5256,41 @@ HTML;
                             $suggestions = array_values(array_slice(array_unique($choice_refs), 0, 4));
                         }
                     }
+                } elseif (!empty($matches)) {
+                    $alts = array();
+                    $choice_refs = array();
+                    foreach ($matches as $m) {
+                        $mref = sanitize_text_field((string) ($m['ref'] ?? ''));
+                        if ($mref !== '') {
+                            $choice_refs[] = $mref;
+                        }
+                        $mname = trim((string) ($m['first_name'] ?? '') . ' ' . (string) ($m['last_name'] ?? ''));
+                        $memail = (string) ($m['email'] ?? '');
+                        $alts[] = '- ' . ($mname !== '' ? $mname : 'N/A') . ' | ' . ($memail !== '' ? $memail : 'N/A') . ' | ' . $mref;
+                    }
+                    $reply = "Plusieurs contacts correspondent à votre demande:\n" . implode("\n", $alts)
+                        . "\n\nRépondez avec la référence LEAD-... pour choisir.";
+                    if (count($choice_refs) > 1) {
+                        self::set_admin_chat_state($owner_user_id, $session_id, array(
+                            'await' => 'contact_pick',
+                            'refs' => array_values(array_slice(array_unique($choice_refs), 0, 8)),
+                        ));
+                        $suggestions = array_values(array_slice(array_unique($choice_refs), 0, 4));
+                    }
                 } else {
                     $reply = "Je n’ai pas trouvé ce contact. Donnez le nom exact, l’email ou la référence LEAD-...";
                 }
             }
-        } elseif ($reply === '') {
-            $llm_fallback = self::admin_llm_reply($message, $last_contact_ref, $leads, $settings);
-            if ($llm_fallback !== '') {
-                $reply = $llm_fallback;
-            } else {
-                $count = count($leads);
-                $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
-                $reply = "Vue CRM rapide: " . $count . " contacts au total, dont " . $rdv . " avec RDV. "
-                    . "Vous pouvez me demander: dernières actions, fiche d’un contact, numéro d’un contact, ou enregistrer une note.";
+            if ($reply === '') {
+                $llm_fallback = self::admin_llm_reply($message, $last_contact_ref, $leads, $settings);
+                if ($llm_fallback !== '') {
+                    $reply = $llm_fallback;
+                } else {
+                    $count = count($leads);
+                    $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
+                    $reply = "Vue CRM rapide: " . $count . " contacts au total, dont " . $rdv . " avec RDV. "
+                        . "Vous pouvez me demander: dernières actions, fiche d’un contact, numéro d’un contact, ou enregistrer une note.";
+                }
             }
         }
 
