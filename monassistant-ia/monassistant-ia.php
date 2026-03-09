@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.1.4
+ * Version: 3.1.5
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.1.4';
+    const VERSION = '3.1.5';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -1186,6 +1186,28 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         return $out !== '' ? $out : $text;
     }
 
+    public static function extract_email_body_from_message($message) {
+        $message = trim((string) $message);
+        if ($message === '') {
+            return '';
+        }
+        if (preg_match('/en\\s+disant\\s+que\\s+(.+)$/iu', $message, $m)) {
+            return trim((string) $m[1]);
+        }
+        if (preg_match('/[:\\-]\\s*(.+)$/u', $message, $m)) {
+            return trim((string) $m[1]);
+        }
+        return '';
+    }
+
+    public static function is_email_request_text($message) {
+        $m = self::normalize_search_text($message);
+        $compact = str_replace(' ', '', $m);
+        $has_email = (strpos($m, 'email') !== false || strpos($m, 'mail') !== false || strpos($compact, 'email') !== false || strpos($compact, 'mail') !== false);
+        $has_action = (bool) preg_match('/\b(envoi|envoyer|envoie|ecris|ecrit|redige|r[eé]dige|message)\b/u', $m);
+        return $has_email && $has_action;
+    }
+
     public static function get_contact_timeline($owner_user_id, $lead) {
         $owner_user_id = self::normalize_owner_user_id($owner_user_id);
         $ref = sanitize_text_field((string) ($lead['ref'] ?? ''));
@@ -1906,6 +1928,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         }
         $owner_user_id = self::normalize_owner_user_id($owner_user_id);
         $settings = self::get_settings();
+        $admin_ctx = self::get_last_admin_chat_context($owner_user_id);
         $cfg = array(
             'owner_id' => $owner_user_id,
             'token' => $token,
@@ -1915,6 +1938,9 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'lang' => 'fr',
             'character_gif_url' => (string) ($settings['character_gif_url'] ?? ''),
             'gif_base_url' => (string) ($settings['character_gif_base_url'] ?? self::DEFAULT_GIF_BASE_URL),
+            'history' => array_values((array) ($admin_ctx['messages'] ?? array())),
+            'initial_session_id' => (string) ($admin_ctx['session_id'] ?? ''),
+            'initial_last_contact_ref' => (string) ($admin_ctx['last_contact_ref'] ?? ''),
         );
         status_header(200);
         nocache_headers();
@@ -2019,7 +2045,7 @@ var defaultGif=(c.character_gif_url||'').trim()||characterGifs.idle;
 character.src=defaultGif;
 character.onerror=function(){if(character.src!==defaultGif){character.src=defaultGif;}};
 
-var lastRef='',chatSessionId='',voiceMode=false,recognizer=null,listening=false,keepListening=false,currentAudio=null,processing=false;
+var lastRef=String(c.initial_last_contact_ref||''),chatSessionId=String(c.initial_session_id||''),voiceMode=false,recognizer=null,listening=false,keepListening=false,currentAudio=null,processing=false;
 var storageKey='azsa_admin_chat_state_v2_'+String(c.owner_id||'0');
 var chatMessages=[];
 var suggestionItems=[];
@@ -2054,6 +2080,21 @@ function restoreState(){
       pushMessage(m.role||'assistant',m.text||'',true);
     });
     if(suggestionItems.length){setSuggestions(suggestionItems);}
+    return true;
+  }catch(e){return false;}
+}
+function restoreServerHistory(){
+  try{
+    var hist=Array.isArray(c.history)?c.history:[];
+    if(!hist.length){return false;}
+    chatMessages=hist.slice(-180).map(function(m){
+      return {role:((m&&m.role)==='user'?'user':'assistant'),text:String((m&&m.text)||'')};
+    });
+    thread.innerHTML='';
+    chatMessages.forEach(function(m){
+      pushMessage(m.role,m.text,true);
+    });
+    saveState();
     return true;
   }catch(e){return false;}
 }
@@ -2288,6 +2329,9 @@ recognizer=setupRecognizer();
 initParticles();
 var restored=restoreState();
 if(!restored){
+  restored=restoreServerHistory();
+}
+if(!restored){
   pushMessage('assistant','Bonjour, je suis votre assistant CRM IA. Je peux lister les dernières actions, ouvrir une fiche contact, donner un numéro et enregistrer des notes.');
   setSuggestions(['Dernières actions','Fiche du dernier contact','Numéro du dernier contact','Note pour ce contact: à rappeler demain']);
 }else{
@@ -2364,6 +2408,89 @@ HTML;
             $events = array_slice($events, 0, 5000);
         }
         update_option(self::OPTION_EVENTS, $events, false);
+    }
+
+    public static function get_last_admin_chat_context($owner_user_id) {
+        $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $events = self::get_events_raw();
+        $chat_types = array('admin_chat_user_message', 'admin_chat_assistant_reply');
+        $target_session = '';
+        foreach ($events as $ev) {
+            if (self::normalize_owner_user_id((int) ($ev['owner_user_id'] ?? 0)) !== $owner_user_id) {
+                continue;
+            }
+            $etype = sanitize_key((string) ($ev['event_type'] ?? ''));
+            if (!in_array($etype, $chat_types, true)) {
+                continue;
+            }
+            $sid = self::sanitize_session_id((string) ($ev['session_id'] ?? ''));
+            if ($sid !== '') {
+                $target_session = $sid;
+                break;
+            }
+        }
+        if ($target_session === '') {
+            return array(
+                'session_id' => '',
+                'last_contact_ref' => '',
+                'messages' => array(),
+            );
+        }
+
+        $rows = array();
+        foreach ($events as $ev) {
+            if (self::normalize_owner_user_id((int) ($ev['owner_user_id'] ?? 0)) !== $owner_user_id) {
+                continue;
+            }
+            if (self::sanitize_session_id((string) ($ev['session_id'] ?? '')) !== $target_session) {
+                continue;
+            }
+            $etype = sanitize_key((string) ($ev['event_type'] ?? ''));
+            if (!in_array($etype, $chat_types, true)) {
+                continue;
+            }
+            $data = json_decode((string) ($ev['data'] ?? '{}'), true);
+            if (!is_array($data)) {
+                $data = array();
+            }
+            $text = trim((string) ($data['message'] ?? $data['reply'] ?? ''));
+            if ($text === '') {
+                continue;
+            }
+            $role = ($etype === 'admin_chat_user_message') ? 'user' : 'assistant';
+            $rows[] = array(
+                'created_at' => (string) ($ev['created_at'] ?? ''),
+                'role' => $role,
+                'text' => self::smart_trim($text, 2000),
+                'contact_ref' => sanitize_text_field((string) ($ev['contact_ref'] ?? '')),
+            );
+        }
+        usort($rows, function ($a, $b) {
+            $ta = strtotime((string) ($a['created_at'] ?? '')) ?: 0;
+            $tb = strtotime((string) ($b['created_at'] ?? '')) ?: 0;
+            return $ta <=> $tb;
+        });
+        $rows = array_slice($rows, -180);
+        $last_contact_ref = '';
+        for ($i = count($rows) - 1; $i >= 0; $i--) {
+            $cr = (string) ($rows[$i]['contact_ref'] ?? '');
+            if ($cr !== '') {
+                $last_contact_ref = $cr;
+                break;
+            }
+        }
+        $messages = array_map(function ($r) {
+            return array(
+                'role' => (string) ($r['role'] ?? 'assistant'),
+                'text' => (string) ($r['text'] ?? ''),
+            );
+        }, $rows);
+
+        return array(
+            'session_id' => $target_session,
+            'last_contact_ref' => $last_contact_ref,
+            'messages' => $messages,
+        );
     }
 
     public static function get_admin_chat_state_raw() {
@@ -2729,6 +2856,121 @@ HTML;
             self::log_event($owner_user_id, 'admin', $important_event_type, array(
                 'message' => self::smart_trim($message, 240),
             ), $session_id, $last_contact_ref);
+        }
+
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'email_confirm' && !empty($admin_state['ref'])) {
+            $target_ref = sanitize_text_field((string) $admin_state['ref']);
+            $contact = self::find_contact_by_query($leads, $target_ref, $target_ref);
+            if (self::text_is_yes($message)) {
+                if (!empty($contact['email']) && is_email((string) $contact['email'])) {
+                    $subject = trim((string) ($admin_state['subject'] ?? 'Message de suivi'));
+                    $body = trim((string) ($admin_state['body'] ?? ''));
+                    $html = nl2br(esc_html($body));
+                    self::send_html_mail((string) $contact['email'], $subject, $html, $body);
+                    $reply = 'Email envoyé à ' . (string) $contact['email'] . '.';
+                    $out_ref = $target_ref;
+                    self::log_event($owner_user_id, 'admin', 'email_sent', array(
+                        'to' => (string) $contact['email'],
+                        'subject' => $subject,
+                        'body' => self::smart_trim($body, 400),
+                    ), $session_id, $target_ref);
+                } else {
+                    $reply = "Impossible d’envoyer: l’email du contact est manquant ou invalide.";
+                }
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+            } elseif (self::text_is_no($message)) {
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $reply = "D’accord, envoi annulé.";
+            } else {
+                $reply = "Confirmez l’envoi par Oui ou annulez par Non.";
+            }
+        }
+
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'email_content' && !empty($admin_state['ref'])) {
+            $target_ref = sanitize_text_field((string) $admin_state['ref']);
+            $contact = self::find_contact_by_query($leads, $target_ref, $target_ref);
+            if (self::text_is_no($message)) {
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $reply = "D’accord, envoi annulé.";
+            } else {
+                $body = self::ai_polish_french_text($message, $settings);
+                $subject = 'Message de suivi';
+                self::set_admin_chat_state($owner_user_id, $session_id, array(
+                    'await' => 'email_confirm',
+                    'ref' => $target_ref,
+                    'subject' => $subject,
+                    'body' => $body,
+                ));
+                $reply = "Brouillon prêt pour " . ((string) ($contact['email'] ?? 'ce contact')) . ":\n\nObjet: " . $subject . "\nMessage: " . $body . "\n\nConfirmez l’envoi ? (Oui/Non)";
+                $out_ref = $target_ref;
+            }
+        }
+
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'email_target') {
+            $query = self::extract_contact_query($message);
+            $contact = array();
+            if ($query !== '') {
+                $matches = self::find_contacts_by_query($leads, $query, 1);
+                if (!empty($matches[0])) {
+                    $contact = $matches[0];
+                }
+            }
+            if (empty($contact['ref'])) {
+                $reply = "Je n’ai pas trouvé ce contact. Donnez le nom, l’email ou la référence LEAD-...";
+            } elseif (empty($contact['email']) || !is_email((string) $contact['email'])) {
+                $reply = "Ce contact n’a pas d’email valide.";
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+            } else {
+                $out_ref = (string) $contact['ref'];
+                self::set_admin_chat_state($owner_user_id, $session_id, array(
+                    'await' => 'email_content',
+                    'ref' => $out_ref,
+                ));
+                $reply = "Parfait. Quel contenu voulez-vous envoyer à " . (string) $contact['email'] . " ?";
+            }
+        }
+
+        if ($reply === '' && self::is_email_request_text($message)) {
+            $query = self::extract_contact_query($message);
+            $contact = array();
+            if ($query !== '') {
+                $matches = self::find_contacts_by_query($leads, $query, 1);
+                if (!empty($matches[0])) {
+                    $contact = $matches[0];
+                }
+            }
+            if (empty($contact['ref']) && $last_contact_ref !== '') {
+                $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
+            }
+            if (empty($contact['ref'])) {
+                self::set_admin_chat_state($owner_user_id, $session_id, array(
+                    'await' => 'email_target',
+                ));
+                $reply = "Pour quel contact voulez-vous envoyer l’email ?";
+            } elseif (empty($contact['email']) || !is_email((string) $contact['email'])) {
+                $reply = "Ce contact n’a pas d’email valide.";
+            } else {
+                $out_ref = (string) $contact['ref'];
+                $body_raw = self::extract_email_body_from_message($message);
+                if ($body_raw === '') {
+                    self::set_admin_chat_state($owner_user_id, $session_id, array(
+                        'await' => 'email_content',
+                        'ref' => $out_ref,
+                    ));
+                    $reply = "Quel contenu voulez-vous envoyer par email ? Je corrigerai le texte avant confirmation.";
+                } else {
+                    $body = self::ai_polish_french_text($body_raw, $settings);
+                    $subject = 'Message de suivi';
+                    self::set_admin_chat_state($owner_user_id, $session_id, array(
+                        'await' => 'email_confirm',
+                        'ref' => $out_ref,
+                        'subject' => $subject,
+                        'body' => $body,
+                    ));
+                    $reply = "Brouillon prêt pour " . (string) $contact['email'] . ":\n\nObjet: " . $subject . "\nMessage: " . $body . "\n\nConfirmez l’envoi ? (Oui/Non)";
+                }
+                $suggestions = array('Oui', 'Non', 'Modifier le message');
+            }
         }
 
         if ($reply === '' && in_array($ai_action, array('get_contact', 'add_note', 'update_phone', 'list_actions', 'list_events', 'summary'), true)) {
