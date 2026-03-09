@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.5.2
+ * Version: 3.6.0
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.5.2';
+    const VERSION = '3.6.0';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
