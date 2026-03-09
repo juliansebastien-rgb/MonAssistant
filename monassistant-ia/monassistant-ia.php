@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.0.3
+ * Version: 3.0.4
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.0.3';
+    const VERSION = '3.0.4';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -323,6 +323,21 @@ final class AZSA_Plugin {
             self::get_admin_assistant_token($owner_user_id, true);
             echo '<div class="notice notice-success"><p>Lien de l’assistant personnel régénéré.</p></div>';
         }
+        if (isset($_POST['azsa_email_admin_assistant_link']) && check_admin_referer('azsa_email_admin_assistant_link', 'azsa_email_admin_assistant_link_nonce')) {
+            $admin_user = get_user_by('id', $owner_user_id);
+            $to = ($admin_user && !empty($admin_user->user_email) && is_email((string) $admin_user->user_email))
+                ? (string) $admin_user->user_email
+                : (string) get_option('admin_email');
+            $link = self::get_admin_assistant_url($owner_user_id);
+            $site_name = (string) get_bloginfo('name');
+            $subject = '[' . $site_name . '] Lien assistant personnel administrateur';
+            $body = "Bonjour,\n\nVoici votre lien d'accès à l'assistant personnel CRM IA:\n" . $link . "\n\nSite: " . home_url('/') . "\n";
+            if (is_email($to) && wp_mail($to, $subject, $body)) {
+                echo '<div class="notice notice-success"><p>Lien envoyé par e-mail à ' . esc_html($to) . '.</p></div>';
+            } else {
+                echo '<div class="notice notice-error"><p>Impossible d’envoyer l’e-mail pour le moment.</p></div>';
+            }
+        }
 
         if (isset($_POST['azsa_check_updates']) && check_admin_referer('azsa_check_updates_now', 'azsa_check_updates_nonce')) {
             $settings = self::get_settings();
@@ -361,12 +376,36 @@ final class AZSA_Plugin {
             <p>Configurez uniquement la connexion au calendrier pour les RDV.</p>
             <div style="margin:12px 0 18px;padding:12px 14px;background:#fff;border:1px solid #dcdcde;border-radius:10px;max-width:980px;">
                 <p style="margin:0 0 8px;"><strong>Assistant personnel pour l’administrateur:</strong></p>
-                <p style="margin:0 0 10px;word-break:break-all;"><a href="<?php echo esc_url($admin_assistant_url); ?>" target="_blank" rel="noopener"><?php echo esc_html($admin_assistant_url); ?></a></p>
-                <form method="post" style="margin:0;">
+                <p id="azsa-admin-assistant-url" style="margin:0 0 10px;word-break:break-all;"><a href="<?php echo esc_url($admin_assistant_url); ?>" target="_blank" rel="noopener"><?php echo esc_html($admin_assistant_url); ?></a></p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                    <button type="button" id="azsa-copy-admin-link" class="button">Copier</button>
+                    <form method="post" style="margin:0;">
+                        <?php wp_nonce_field('azsa_email_admin_assistant_link', 'azsa_email_admin_assistant_link_nonce'); ?>
+                        <button type="submit" name="azsa_email_admin_assistant_link" class="button">Envoyer par e-mail</button>
+                    </form>
+                </div>
+                <form method="post" style="margin:10px 0 0;">
                     <?php wp_nonce_field('azsa_regen_admin_assistant_token', 'azsa_regen_admin_assistant_token_nonce'); ?>
                     <button type="submit" name="azsa_regen_admin_assistant_token" class="button">Régénérer le lien</button>
                 </form>
             </div>
+            <script>
+            (function(){
+                var btn = document.getElementById('azsa-copy-admin-link');
+                var node = document.getElementById('azsa-admin-assistant-url');
+                if (!btn || !node) return;
+                btn.addEventListener('click', function(){
+                    var txt = node.textContent || '';
+                    if (!txt) return;
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(txt).then(function(){ btn.textContent = 'Copié'; setTimeout(function(){ btn.textContent = 'Copier'; }, 1200); });
+                        return;
+                    }
+                    var ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+                    btn.textContent = 'Copié'; setTimeout(function(){ btn.textContent = 'Copier'; }, 1200);
+                });
+            })();
+            </script>
             <p>
                 <strong>Version installée:</strong> <?php echo esc_html(self::VERSION); ?> |
                 <strong>Dernière version:</strong> <?php echo esc_html($latest); ?> |
@@ -1330,6 +1369,97 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         return array();
     }
 
+    public static function normalize_search_text($text) {
+        $text = trim((string) $text);
+        if ($text === '') {
+            return '';
+        }
+        if (function_exists('remove_accents')) {
+            $text = remove_accents($text);
+        }
+        $text = strtolower($text);
+        $text = preg_replace('/[^a-z0-9@\.\s\-_]/', ' ', $text);
+        $text = preg_replace('/\s+/', ' ', (string) $text);
+        return trim((string) $text);
+    }
+
+    public static function extract_contact_query($message) {
+        $message = trim((string) $message);
+        if ($message === '') {
+            return '';
+        }
+        if (preg_match('/([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i', $message, $em)) {
+            return trim((string) $em[1]);
+        }
+        $q = self::normalize_search_text($message);
+        // Remove intent words so we keep only potential contact identifiers.
+        $q = preg_replace('/\b(donne|moi|la|le|les|fiche|du|de|des|contact|numero|numeros|numeros|telephone|tel|stp|svp|pour|du|d)\b/', ' ', (string) $q);
+        $q = preg_replace('/\s+/', ' ', (string) $q);
+        return trim((string) $q);
+    }
+
+    public static function find_contacts_by_query($leads, $query, $limit = 5) {
+        $query = self::normalize_search_text($query);
+        if ($query === '') {
+            return array();
+        }
+        $tokens = array_values(array_filter(explode(' ', $query), function ($t) {
+            return strlen((string) $t) >= 2;
+        }));
+
+        $scored = array();
+        foreach ((array) $leads as $lead) {
+            $ref = (string) ($lead['ref'] ?? '');
+            $first = (string) ($lead['first_name'] ?? '');
+            $last = (string) ($lead['last_name'] ?? '');
+            $email = (string) ($lead['email'] ?? '');
+            $name = trim($first . ' ' . $last);
+
+            $ref_n = self::normalize_search_text($ref);
+            $name_n = self::normalize_search_text($name);
+            $email_n = self::normalize_search_text($email);
+            $stack = trim($ref_n . ' ' . $name_n . ' ' . $email_n);
+            if ($stack === '') {
+                continue;
+            }
+
+            $score = 0;
+            if ($email_n !== '' && $query === $email_n) {
+                $score += 120;
+            }
+            if ($ref_n !== '' && $query === $ref_n) {
+                $score += 110;
+            }
+            if ($name_n !== '' && $query === $name_n) {
+                $score += 100;
+            }
+            if (strpos($stack, $query) !== false) {
+                $score += 60;
+            }
+            foreach ($tokens as $tk) {
+                if (strpos($stack, $tk) !== false) {
+                    $score += 8;
+                }
+            }
+            if ($score > 0) {
+                $lead['_score'] = $score;
+                $scored[] = $lead;
+            }
+        }
+
+        usort($scored, function ($a, $b) {
+            $sa = (int) ($a['_score'] ?? 0);
+            $sb = (int) ($b['_score'] ?? 0);
+            if ($sa === $sb) {
+                $ta = strtotime((string) ($a['created_at'] ?? '')) ?: 0;
+                $tb = strtotime((string) ($b['created_at'] ?? '')) ?: 0;
+                return $tb <=> $ta;
+            }
+            return $sb <=> $sa;
+        });
+        return array_slice($scored, 0, max(1, (int) $limit));
+    }
+
     public static function rest_admin_assistant_chat(WP_REST_Request $request) {
         $owner_user_id = self::normalize_owner_user_id((int) $request->get_param('owner_id'));
         $token = sanitize_text_field((string) $request->get_param('token'));
@@ -1360,13 +1490,17 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
                 $reply = 'Contact introuvable pour enregistrer la note.';
             }
         } elseif (strpos($lower, 'fiche') !== false || strpos($lower, 'contact') !== false || strpos($lower, 'num') !== false || strpos($lower, 'tél') !== false || strpos($lower, 'tel') !== false) {
-            $query = '';
-            if (preg_match('/([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i', $message, $em)) {
-                $query = $em[1];
-            } elseif (preg_match('/(?:de|du|pour)\s+(.+)$/iu', $message, $nm)) {
-                $query = trim((string) $nm[1]);
+            $query = self::extract_contact_query($message);
+            $contact = array();
+            $matches = array();
+            if ($query !== '') {
+                $matches = self::find_contacts_by_query($leads, $query, 4);
+                if (!empty($matches[0])) {
+                    $contact = $matches[0];
+                }
+            } elseif ($last_contact_ref !== '') {
+                $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
             }
-            $contact = self::find_contact_by_query($leads, $query, $last_contact_ref);
             if (empty($contact['ref'])) {
                 $reply = 'Je n’ai pas trouvé le contact demandé.';
             } else {
@@ -1384,6 +1518,19 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
                     . "- Téléphone: " . ($phone !== '' ? $phone : 'N/A') . "\n"
                     . "- Statut: " . $kind . "\n"
                     . "- Dernière note: " . $last_note;
+
+                if (!empty($matches) && count($matches) > 1) {
+                    $alts = array();
+                    foreach (array_slice($matches, 1, 3) as $m) {
+                        $alt_name = trim((string) ($m['first_name'] ?? '') . ' ' . (string) ($m['last_name'] ?? ''));
+                        $alt_email = (string) ($m['email'] ?? '');
+                        $alt_ref = (string) ($m['ref'] ?? '');
+                        $alts[] = '- ' . ($alt_name !== '' ? $alt_name : 'N/A') . ' | ' . ($alt_email !== '' ? $alt_email : 'N/A') . ' | ' . $alt_ref;
+                    }
+                    if (!empty($alts)) {
+                        $reply .= "\n\nAutres fiches proches:\n" . implode("\n", $alts);
+                    }
+                }
             }
         } elseif (strpos($lower, 'action') !== false || strpos($lower, 'évén') !== false || strpos($lower, 'even') !== false || strpos($lower, 'historique') !== false) {
             $items = array_slice($leads, 0, 8);
