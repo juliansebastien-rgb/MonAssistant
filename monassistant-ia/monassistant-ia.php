@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.5
+ * Version: 3.6.6
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.5';
+    const VERSION = '3.6.6';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -98,14 +98,39 @@ final class AZSA_Plugin {
                 }
             }
         }
+        $overrides = array();
+        if (!empty($raw['overrides']) && is_array($raw['overrides'])) {
+            foreach ($raw['overrides'] as $ov) {
+                if (!is_array($ov)) {
+                    continue;
+                }
+                $action = sanitize_key((string) ($ov['action'] ?? ''));
+                $tokens = array();
+                if (!empty($ov['tokens']) && is_array($ov['tokens'])) {
+                    foreach ($ov['tokens'] as $t) {
+                        $tt = self::normalize_search_text((string) $t);
+                        if ($tt !== '' && strlen($tt) >= 3) {
+                            $tokens[] = $tt;
+                        }
+                    }
+                }
+                if ($action !== '' && !empty($tokens)) {
+                    $overrides[] = array(
+                        'action' => $action,
+                        'tokens' => array_values(array_slice(array_unique($tokens), 0, 8)),
+                    );
+                }
+            }
+        }
         return array(
             'rules' => array_values(array_slice(array_unique($rules), 0, 80)),
+            'overrides' => array_values(array_slice($overrides, 0, 80)),
             'updated_at' => sanitize_text_field((string) ($raw['updated_at'] ?? '')),
             'source' => sanitize_key((string) ($raw['source'] ?? 'local')),
         );
     }
 
-    public static function save_global_rules($rules, $source = 'local') {
+    public static function save_global_rules($rules, $source = 'local', $overrides = null) {
         $clean = array();
         foreach ((array) $rules as $r) {
             $txt = trim(wp_strip_all_tags((string) $r));
@@ -113,8 +138,13 @@ final class AZSA_Plugin {
                 $clean[] = $txt;
             }
         }
+        if ($overrides === null) {
+            $existing = self::get_global_rules_raw();
+            $overrides = isset($existing['overrides']) && is_array($existing['overrides']) ? $existing['overrides'] : array();
+        }
         $payload = array(
             'rules' => array_values(array_slice(array_unique($clean), 0, 80)),
+            'overrides' => is_array($overrides) ? array_values(array_slice($overrides, 0, 80)) : array(),
             'updated_at' => gmdate('c'),
             'source' => sanitize_key((string) $source),
         );
@@ -132,8 +162,96 @@ final class AZSA_Plugin {
         if (!in_array($rule, $rules, true)) {
             $rules[] = $rule;
         }
-        self::save_global_rules($rules, 'local');
+        self::save_global_rules($rules, 'local', isset($raw['overrides']) ? (array) $raw['overrides'] : array());
         return true;
+    }
+
+    public static function infer_override_action_from_message($message) {
+        $m = self::normalize_search_text($message);
+        if (preg_match('/\b(appel|appelle|appelles|appeler|appelez|telephone|tel)\b/u', $m)) {
+            return 'call_contact';
+        }
+        if (preg_match('/\b(email|mail)\b/u', $m)) {
+            return 'email_contact';
+        }
+        if (preg_match('/\b(sms|texto)\b/u', $m)) {
+            return 'sms_contact';
+        }
+        if (preg_match('/\b(whatsapp|whats app|whatsap)\b/u', $m)) {
+            return 'whatsapp_contact';
+        }
+        if (preg_match('/\b(fiche|contact|numero|numéro)\b/u', $m)) {
+            return 'show_contact';
+        }
+        return '';
+    }
+
+    public static function add_global_override_from_example($question_text, $action) {
+        $action = sanitize_key((string) $action);
+        if ($action === '') {
+            return false;
+        }
+        $q = self::normalize_search_text((string) $question_text);
+        if ($q === '') {
+            return false;
+        }
+        $tokens = array_values(array_filter(explode(' ', $q), function ($t) {
+            $t = (string) $t;
+            if (strlen($t) < 3) {
+                return false;
+            }
+            static $stop = array(
+                'bonjour'=>1,'salut'=>1,'merci'=>1,'stp'=>1,'svp'=>1,'moi'=>1,'toi'=>1,'avec'=>1,'pour'=>1,'dans'=>1,
+                'fiche'=>1,'contact'=>1,'cette'=>1,'celui'=>1,'celle'=>1,'cela'=>1,'comme'=>1,'etre'=>1,'etre'=>1,
+                'the'=>1,'and'=>1
+            );
+            return empty($stop[$t]);
+        }));
+        if (empty($tokens)) {
+            return false;
+        }
+        $tokens = array_values(array_slice(array_unique($tokens), 0, 6));
+        $raw = self::get_global_rules_raw();
+        $overrides = isset($raw['overrides']) && is_array($raw['overrides']) ? $raw['overrides'] : array();
+        foreach ($overrides as $ov) {
+            if (($ov['action'] ?? '') === $action && !empty($ov['tokens']) && is_array($ov['tokens'])) {
+                $same = array_intersect($tokens, (array) $ov['tokens']);
+                if (count($same) >= max(1, min(2, count($tokens)))) {
+                    return true;
+                }
+            }
+        }
+        $overrides[] = array('action' => $action, 'tokens' => $tokens);
+        self::save_global_rules((array) ($raw['rules'] ?? array()), 'local', $overrides);
+        return true;
+    }
+
+    public static function match_global_override_action($message, $settings = array()) {
+        $data = self::is_master_site()
+            ? self::get_global_rules_raw()
+            : self::sync_global_rules_from_master(false, $settings);
+        $m = self::normalize_search_text((string) $message);
+        if ($m === '') {
+            return '';
+        }
+        foreach ((array) ($data['overrides'] ?? array()) as $ov) {
+            $action = sanitize_key((string) ($ov['action'] ?? ''));
+            $tokens = !empty($ov['tokens']) && is_array($ov['tokens']) ? $ov['tokens'] : array();
+            if ($action === '' || empty($tokens)) {
+                continue;
+            }
+            $hit = 0;
+            foreach ($tokens as $tk) {
+                $tk = self::normalize_search_text((string) $tk);
+                if ($tk !== '' && strpos($m, $tk) !== false) {
+                    $hit++;
+                }
+            }
+            if ($hit >= max(1, min(2, count($tokens)))) {
+                return $action;
+            }
+        }
+        return '';
     }
 
     public static function sync_global_rules_from_master($force = false, $settings = array()) {
@@ -1783,9 +1901,12 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         if ($proposal === '') {
             $proposal = "Quand une réponse est ambiguë ou imprécise, demander une clarification avant d'agir sur une fiche contact.";
         }
+        $proposed_action = self::infer_override_action_from_message($question_text);
         self::set_admin_chat_state($owner_user_id, $session_id, array(
             'await' => 'improve_confirm',
             'rule_text' => $proposal,
+            'source_question' => self::smart_trim($question_text, 240),
+            'proposed_action' => $proposed_action,
         ));
 
         return new WP_REST_Response(array(
@@ -2250,6 +2371,15 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         $owner_user_id = self::normalize_owner_user_id($owner_user_id);
         $settings = self::get_settings();
         $admin_ctx = self::get_last_admin_chat_context($owner_user_id);
+        $initial_contact = array();
+        $initial_ref = (string) ($admin_ctx['last_contact_ref'] ?? '');
+        if ($initial_ref !== '') {
+            $leads_owner = self::get_leads($owner_user_id);
+            $found = self::find_contact_by_query($leads_owner, $initial_ref, $initial_ref);
+            if (!empty($found['ref'])) {
+                $initial_contact = self::build_contact_payload($found);
+            }
+        }
         $cfg = array(
             'owner_id' => $owner_user_id,
             'token' => $token,
@@ -2264,6 +2394,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'history' => array_values((array) ($admin_ctx['messages'] ?? array())),
             'initial_session_id' => (string) ($admin_ctx['session_id'] ?? ''),
             'initial_last_contact_ref' => (string) ($admin_ctx['last_contact_ref'] ?? ''),
+            'initial_current_contact' => $initial_contact,
         );
         status_header(200);
         nocache_headers();
@@ -2283,6 +2414,10 @@ body{margin:0;background:#ffffff;font-family:Raleway,Segoe UI,Arial,sans-serif;c
 .ma-ai-left{position:relative;min-height:520px;height:520px;max-height:520px;overflow:visible;background:transparent!important}
 .ma-ai-particles{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:.9;z-index:4}
 .ma-ai-character{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:2;background:transparent!important}
+.ma-ai-active-contact{position:absolute;left:10px;bottom:10px;z-index:6;width:min(360px,92%);background:rgba(255,255,255,.96);border:1px solid rgba(18,61,100,.18);border-radius:14px;box-shadow:0 10px 24px rgba(18,61,100,.12);padding:10px 12px}
+.ma-ai-active-contact h3{margin:0 0 6px;font-size:13px;color:#123d64}
+.ma-ai-active-contact .ma-ai-contact-tag{display:inline-block;margin:0 0 8px;padding:2px 8px;border-radius:999px;background:#eef6ff;color:#123d64;font-size:11px;font-weight:700}
+.ma-ai-active-contact .ma-ai-contact-line{margin:3px 0;font-size:12px;line-height:1.35;color:#1f3f60;word-break:break-word}
 .ma-ai-chat{position:relative;min-height:520px;height:520px;max-height:520px;border:1px solid rgba(18,61,100,.16);border-radius:18px;background:rgba(255,255,255,.84);box-shadow:0 12px 36px rgba(18,61,100,.10);padding:14px;display:flex;flex-direction:column;gap:10px}
 .ma-ai-chat-head{margin:0 0 2px}
 .ma-ai-chat-title{margin:0;color:#123d64;font-size:17px;font-weight:700}
@@ -2309,7 +2444,7 @@ body{margin:0;background:#ffffff;font-family:Raleway,Segoe UI,Arial,sans-serif;c
 #ma-ai-mode-toggle:hover{background:#dfeeff}
 #ma-ai-mic-toggle{min-width:46px}
 .ma-ai-hidden{display:none!important}
-@media (max-width:920px){.ma-ai-layout{grid-template-columns:1fr}.ma-ai-left{min-height:260px;height:260px;max-height:260px}.ma-ai-chat{min-height:62dvh;height:62dvh;max-height:62dvh}}
+@media (max-width:920px){.ma-ai-layout{grid-template-columns:1fr}.ma-ai-left{min-height:300px;height:300px;max-height:300px}.ma-ai-active-contact{left:8px;right:8px;width:auto;bottom:8px}.ma-ai-chat{min-height:62dvh;height:62dvh;max-height:62dvh}}
 </style>
 </head>
 <body>
@@ -2319,6 +2454,14 @@ body{margin:0;background:#ffffff;font-family:Raleway,Segoe UI,Arial,sans-serif;c
       <div class="ma-ai-left">
         <img class="ma-ai-character" id="ma-ai-character" alt="Assistant visuel" />
         <canvas id="ma-ai-particles" class="ma-ai-particles" aria-hidden="true"></canvas>
+        <div id="ma-ai-active-contact" class="ma-ai-active-contact ma-ai-hidden">
+          <h3>Fiche active</h3>
+          <span class="ma-ai-contact-tag" id="ma-ai-contact-status">Lead</span>
+          <div class="ma-ai-contact-line" id="ma-ai-contact-name"></div>
+          <div class="ma-ai-contact-line" id="ma-ai-contact-ref"></div>
+          <div class="ma-ai-contact-line" id="ma-ai-contact-email"></div>
+          <div class="ma-ai-contact-line" id="ma-ai-contact-phone"></div>
+        </div>
       </div>
       <div class="ma-ai-chat">
         <div class="ma-ai-chat-head">
@@ -2352,7 +2495,13 @@ var micBtn=document.getElementById('ma-ai-mic-toggle');
 var chatHelp=document.getElementById('ma-ai-chat-help');
 var character=document.getElementById('ma-ai-character');
 var canvas=document.getElementById('ma-ai-particles');
-if(!thread||!form||!input||!statusNode||!suggestions||!modeBtn||!micBtn||!character||!canvas){return;}
+var activeContact=document.getElementById('ma-ai-active-contact');
+var contactStatus=document.getElementById('ma-ai-contact-status');
+var contactName=document.getElementById('ma-ai-contact-name');
+var contactRef=document.getElementById('ma-ai-contact-ref');
+var contactEmail=document.getElementById('ma-ai-contact-email');
+var contactPhone=document.getElementById('ma-ai-contact-phone');
+if(!thread||!form||!input||!statusNode||!suggestions||!modeBtn||!micBtn||!character||!canvas||!activeContact||!contactStatus||!contactName||!contactRef||!contactEmail||!contactPhone){return;}
 
 chatHelp.textContent='Connecté à '+(c.site_name||'votre site')+'. Demandez une fiche contact, les dernières actions, un numéro ou ajoutez des notes.';
 var gifBase=(c.gif_base_url||'').replace(/\/?$/,'/');
@@ -2372,17 +2521,31 @@ character.src=defaultGif;
 character.onerror=function(){if(character.src!==defaultGif){character.src=defaultGif;}};
 
 var lastRef=String(c.initial_last_contact_ref||''),chatSessionId=String(c.initial_session_id||''),voiceMode=false,recognizer=null,listening=false,keepListening=false,currentAudio=null,processing=false;
+var currentContact=(c.initial_current_contact&&typeof c.initial_current_contact==='object')?c.initial_current_contact:null;
 var storageKey='azsa_admin_chat_state_v2_'+String(c.owner_id||'0');
 var chatMessages=[];
 var suggestionItems=[];
 function setMood(m){if(characterGifs[m]){character.src=characterGifs[m];}}
 function setStatus(text,thinking){statusNode.textContent=text||'';statusNode.classList.toggle('is-thinking',!!thinking);}
+function renderActiveContact(contact){
+  if(!contact||typeof contact!=='object'||!contact.ref){
+    activeContact.classList.add('ma-ai-hidden');
+    return;
+  }
+  contactStatus.textContent=String(contact.status||'Lead');
+  contactName.textContent='Nom: '+String(contact.name||'N/A');
+  contactRef.textContent='Réf: '+String(contact.ref||'');
+  contactEmail.textContent='Email: '+String(contact.email||'N/A');
+  contactPhone.textContent='Téléphone: '+String(contact.phone||'N/A');
+  activeContact.classList.remove('ma-ai-hidden');
+}
 function saveState(){
   try{
     localStorage.setItem(storageKey,JSON.stringify({
       v:2,
       messages:chatMessages.slice(-180),
       last_ref:lastRef||'',
+      current_contact:currentContact||null,
       session_id:chatSessionId||'',
       voice_mode:!!voiceMode,
       suggestions:suggestionItems.slice(0,6),
@@ -2398,6 +2561,7 @@ function restoreState(){
     if(!st||!Array.isArray(st.messages)||!st.messages.length){return false;}
     chatMessages=st.messages.slice(-180);
     lastRef=String(st.last_ref||'');
+    currentContact=(st.current_contact&&typeof st.current_contact==='object')?st.current_contact:null;
     chatSessionId=String(st.session_id||'');
     voiceMode=!!st.voice_mode;
     suggestionItems=Array.isArray(st.suggestions)?st.suggestions.slice(0,6):[];
@@ -2405,6 +2569,7 @@ function restoreState(){
     chatMessages.forEach(function(m){
       pushMessage(m.role||'assistant',m.text||'',true);
     });
+    renderActiveContact(currentContact);
     if(suggestionItems.length){setSuggestions(suggestionItems);}
     return true;
   }catch(e){return false;}
@@ -2420,6 +2585,7 @@ function restoreServerHistory(){
     chatMessages.forEach(function(m){
       pushMessage(m.role,m.text,true);
     });
+    renderActiveContact(currentContact);
     saveState();
     return true;
   }catch(e){return false;}
@@ -2661,6 +2827,7 @@ form.addEventListener('submit',async function(e){
     var rep=(d&&d.reply)?d.reply:'Je n ai pas pu traiter la demande.';
     pushMessage('assistant',rep);
     if(d&&d.last_contact_ref){lastRef=d.last_contact_ref;}
+    if(d&&d.current_contact&&typeof d.current_contact==='object'){currentContact=d.current_contact; renderActiveContact(currentContact);}
     if(d&&d.session_id){chatSessionId=String(d.session_id);}
     if(d&&Array.isArray(d.suggestions)){setSuggestions(d.suggestions.slice(0,4));}
     saveState();
@@ -2724,6 +2891,7 @@ if(!restored){
 }else{
   pushMessage('assistant','Salut, de retour. On reprend la conversation.',true);
 }
+renderActiveContact(currentContact);
 modeBtn.textContent=voiceMode?'Mode: Vocal':'Mode: Écrit';
 micBtn.classList.toggle('ma-ai-hidden',!voiceMode);
 setStatus('Prêt',false);
@@ -2961,6 +3129,20 @@ HTML;
         return isset($all[(string) $owner_user_id][$contact_ref]) && is_array($all[(string) $owner_user_id][$contact_ref])
             ? $all[(string) $owner_user_id][$contact_ref]
             : array();
+    }
+
+    public static function build_contact_payload($contact) {
+        if (!is_array($contact) || empty($contact['ref'])) {
+            return array();
+        }
+        $name = trim((string) ($contact['first_name'] ?? '') . ' ' . (string) ($contact['last_name'] ?? ''));
+        return array(
+            'ref' => sanitize_text_field((string) ($contact['ref'] ?? '')),
+            'name' => $name !== '' ? $name : 'N/A',
+            'email' => sanitize_email((string) ($contact['email'] ?? '')),
+            'phone' => sanitize_text_field((string) ($contact['phone'] ?? '')),
+            'status' => !empty($contact['wants_rdv']) ? 'RDV' : 'Lead',
+        );
     }
 
     public static function find_contact_by_query($leads, $query, $fallback_ref = '') {
@@ -3362,6 +3544,11 @@ HTML;
             $rule_text = trim((string) $admin_state['rule_text']);
             if (self::text_is_yes($message)) {
                 self::add_global_rule($rule_text);
+                $src_q = trim((string) ($admin_state['source_question'] ?? ''));
+                $p_action = sanitize_key((string) ($admin_state['proposed_action'] ?? ''));
+                if ($src_q !== '' && $p_action !== '') {
+                    self::add_global_override_from_example($src_q, $p_action);
+                }
                 self::clear_admin_chat_state($owner_user_id, $session_id);
                 $reply = "Amélioration validée et publiée globalement. Elle sera synchronisée sur les autres sites.";
                 $suggestions = array('Proposer amélioration', 'Dernières actions', 'Voir la fiche en cours');
@@ -4095,6 +4282,15 @@ HTML;
             $suggestions = $dynamic_suggestions;
         }
 
+        $current_contact = array();
+        $effective_ref = $out_ref !== '' ? $out_ref : $last_contact_ref;
+        if ($effective_ref !== '') {
+            $contact_active = self::find_contact_by_query($leads, $effective_ref, $effective_ref);
+            if (!empty($contact_active['ref'])) {
+                $current_contact = self::build_contact_payload($contact_active);
+            }
+        }
+
         self::log_event($owner_user_id, 'assistant', 'admin_chat_assistant_reply', array(
             'reply' => self::smart_trim($reply, 700),
         ), $session_id, $out_ref);
@@ -4103,6 +4299,7 @@ HTML;
             'suggestions' => $suggestions,
             'last_contact_ref' => $out_ref,
             'session_id' => $session_id,
+            'current_contact' => $current_contact,
         ), 200);
     }
 
