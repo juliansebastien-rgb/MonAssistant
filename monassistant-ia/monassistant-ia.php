@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.8
+ * Version: 3.6.9
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.8';
+    const VERSION = '3.6.9';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -1486,6 +1486,73 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         return $out !== '' ? $out : $text;
     }
 
+    public static function ai_compose_email_body($prompt, $settings) {
+        $prompt = trim((string) $prompt);
+        if ($prompt === '') {
+            return '';
+        }
+        $api_key = trim((string) ($settings['api_key'] ?? ''));
+        if ($api_key === '' && defined('ANTHROPIC_API_KEY')) {
+            $api_key = (string) ANTHROPIC_API_KEY;
+        }
+        if ($api_key === '') {
+            return $prompt;
+        }
+        $payload = array(
+            'model' => $settings['model'] ?: 'claude-sonnet-4-20250514',
+            'max_tokens' => 320,
+            'temperature' => 0.35,
+            'system' => "Rédige le corps d'un email en français, clair, utile et prêt à envoyer, à partir de la demande. "
+                . "Ne fais pas de méta-commentaire, ne refuse pas, ne parle pas de correction de texte. "
+                . "Retourne uniquement le contenu final de l'email.",
+            'messages' => array(
+                array(
+                    'role' => 'user',
+                    'content' => array(
+                        array('type' => 'text', 'text' => $prompt),
+                    ),
+                ),
+            ),
+        );
+        $res = wp_remote_post('https://api.anthropic.com/v1/messages', array(
+            'timeout' => 20,
+            'headers' => array(
+                'x-api-key' => $api_key,
+                'anthropic-version' => '2023-06-01',
+                'content-type' => 'application/json',
+            ),
+            'body' => wp_json_encode($payload),
+        ));
+        if (is_wp_error($res) || (int) wp_remote_retrieve_response_code($res) >= 300) {
+            return $prompt;
+        }
+        $body = json_decode((string) wp_remote_retrieve_body($res), true);
+        if (!is_array($body) || empty($body['content'])) {
+            return $prompt;
+        }
+        $out = '';
+        foreach ((array) $body['content'] as $c) {
+            if (($c['type'] ?? '') === 'text') {
+                $out .= (string) ($c['text'] ?? '');
+            }
+        }
+        $out = trim((string) $out);
+        return $out !== '' ? $out : $prompt;
+    }
+
+    public static function build_email_body_from_admin_input($input, $settings) {
+        $input = trim((string) $input);
+        if ($input === '') {
+            return '';
+        }
+        $norm = self::normalize_search_text($input);
+        $looks_like_compose = (bool) preg_match('/\b(fais|fait|redige|r[eé]dige|ecris|écris|prepare|prépare|envoie|envoyer|mail|email)\b/u', $norm);
+        if ($looks_like_compose) {
+            return self::ai_compose_email_body($input, $settings);
+        }
+        return self::ai_polish_french_text($input, $settings);
+    }
+
     public static function extract_email_body_from_message($message) {
         $message = trim((string) $message);
         if ($message === '') {
@@ -1920,11 +1987,17 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             $proposal = "Quand une réponse est ambiguë ou imprécise, demander une clarification avant d'agir sur une fiche contact.";
         }
         $proposed_action = self::infer_override_action_from_message($question_text);
+        $existing_state = self::get_admin_chat_state($owner_user_id, $session_id);
+        $resume_state = array();
+        if (!empty($existing_state['await']) && !in_array((string) $existing_state['await'], array('improve_confirm', 'improve_text'), true)) {
+            $resume_state = $existing_state;
+        }
         self::set_admin_chat_state($owner_user_id, $session_id, array(
             'await' => 'improve_confirm',
             'rule_text' => $proposal,
             'source_question' => self::smart_trim($question_text, 240),
             'proposed_action' => $proposed_action,
+            'resume_state' => $resume_state,
         ));
 
         return new WP_REST_Response(array(
@@ -3596,6 +3669,14 @@ HTML;
         $suggestions = array('Dernières actions', 'Fiche du dernier contact', 'Numéro du dernier contact');
         $out_ref = $last_contact_ref;
         $admin_state = self::get_admin_chat_state($owner_user_id, $session_id);
+        if ($last_contact_ref === '') {
+            $ctx = self::get_last_admin_chat_context($owner_user_id);
+            $ctx_ref = sanitize_text_field((string) ($ctx['last_contact_ref'] ?? ''));
+            if ($ctx_ref !== '') {
+                $last_contact_ref = $ctx_ref;
+                $out_ref = $ctx_ref;
+            }
+        }
         $settings = self::get_settings($owner_user_id);
         self::sync_global_rules_from_master(false, $settings);
         $ai_intent = self::admin_ai_intent($message, $last_contact_ref, $settings);
@@ -3612,6 +3693,7 @@ HTML;
 
         if ($reply === '' && self::is_master_site() && !empty($admin_state['await']) && (string) $admin_state['await'] === 'improve_confirm' && !empty($admin_state['rule_text'])) {
             $rule_text = trim((string) $admin_state['rule_text']);
+            $resume_state = (!empty($admin_state['resume_state']) && is_array($admin_state['resume_state'])) ? $admin_state['resume_state'] : array();
             if (self::text_is_yes($message)) {
                 self::add_global_rule($rule_text);
                 $src_q = trim((string) ($admin_state['source_question'] ?? ''));
@@ -3619,14 +3701,22 @@ HTML;
                 if ($src_q !== '' && $p_action !== '') {
                     self::add_global_override_from_example($src_q, $p_action);
                 }
-                self::clear_admin_chat_state($owner_user_id, $session_id);
+                if (!empty($resume_state)) {
+                    self::set_admin_chat_state($owner_user_id, $session_id, $resume_state);
+                } else {
+                    self::clear_admin_chat_state($owner_user_id, $session_id);
+                }
                 $reply = "Amélioration validée et publiée globalement. Elle sera synchronisée sur les autres sites.";
                 $suggestions = array('Proposer amélioration', 'Dernières actions', 'Voir la fiche en cours');
                 self::log_event($owner_user_id, 'admin', 'global_rule_added', array(
                     'rule' => self::smart_trim($rule_text, 300),
                 ), $session_id, $last_contact_ref);
             } elseif (self::text_is_no($message)) {
-                self::clear_admin_chat_state($owner_user_id, $session_id);
+                if (!empty($resume_state)) {
+                    self::set_admin_chat_state($owner_user_id, $session_id, $resume_state);
+                } else {
+                    self::clear_admin_chat_state($owner_user_id, $session_id);
+                }
                 $reply = "D’accord, amélioration annulée.";
             } else {
                 $reply = "Confirmez par Oui pour publier cette amélioration, ou Non pour annuler.";
@@ -3639,9 +3729,11 @@ HTML;
             if (trim((string) $rule_text) === '') {
                 $reply = "Je n’ai pas compris l’amélioration. Reformulez en une règle claire.";
             } else {
+                $resume_state = (!empty($admin_state['resume_state']) && is_array($admin_state['resume_state'])) ? $admin_state['resume_state'] : array();
                 self::set_admin_chat_state($owner_user_id, $session_id, array(
                     'await' => 'improve_confirm',
                     'rule_text' => $rule_text,
+                    'resume_state' => $resume_state,
                 ));
                 $reply = "Proposition détectée:\n- " . $rule_text . "\n\nVoulez-vous la publier globalement ? (Oui/Non)";
                 $suggestions = array('Oui', 'Non');
@@ -3656,7 +3748,14 @@ HTML;
                 || self::normalize_search_text($message) === 'proposer amelioration'
             )
         ) {
-            self::set_admin_chat_state($owner_user_id, $session_id, array('await' => 'improve_text'));
+            $resume_state = array();
+            if (!empty($admin_state['await']) && !in_array((string) $admin_state['await'], array('improve_confirm', 'improve_text'), true)) {
+                $resume_state = $admin_state;
+            }
+            self::set_admin_chat_state($owner_user_id, $session_id, array(
+                'await' => 'improve_text',
+                'resume_state' => $resume_state,
+            ));
             $reply = "Indiquez la règle d’amélioration à appliquer globalement (comportement, ton, restriction, workflow).";
             $suggestions = array('Annuler');
         }
@@ -3800,7 +3899,7 @@ HTML;
                 self::clear_admin_chat_state($owner_user_id, $session_id);
                 $reply = "D’accord, envoi annulé.";
             } else {
-                $body = self::ai_polish_french_text($message, $settings);
+                $body = self::build_email_body_from_admin_input($message, $settings);
                 $subject = 'Message de suivi';
                 self::set_admin_chat_state($owner_user_id, $session_id, array(
                     'await' => 'email_confirm',
@@ -4056,7 +4155,7 @@ HTML;
                     ));
                     $reply = "Quel contenu voulez-vous envoyer par email ? Je corrigerai le texte avant confirmation.";
                 } else {
-                    $body = self::ai_polish_french_text($body_raw, $settings);
+                    $body = self::build_email_body_from_admin_input($body_raw, $settings);
                     $subject = 'Message de suivi';
                     self::set_admin_chat_state($owner_user_id, $session_id, array(
                         'await' => 'email_confirm',
