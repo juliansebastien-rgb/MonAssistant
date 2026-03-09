@@ -85,6 +85,7 @@
     var bookingOpen = false;
     var bookingPollTimer = null;
     var bookingSessionId = '';
+    var chatSessionId = '';
     var userQuestionCount = 0;
     var chatMessages = [];
     var STORAGE_KEY = 'azsa_chat_state_v2';
@@ -127,6 +128,7 @@
       try {
         var payload = {
           v: 2,
+          session_id: chatSessionId,
           messages: chatMessages.slice(-80),
           transcript: transcript.slice(-80),
           lead: lead,
@@ -400,7 +402,7 @@
       var rec = new SR();
       rec.lang = (cfg.lang || 'fr') === 'fr' ? 'fr-FR' : ((cfg.lang || 'en') + '-' + (cfg.lang || 'en').toUpperCase());
       rec.interimResults = false;
-      rec.continuous = false;
+      rec.continuous = true;
       rec.maxAlternatives = 1;
 
       rec.onstart = function () {
@@ -419,9 +421,18 @@
         form.dispatchEvent(new Event('submit', { cancelable: true }));
       };
 
-      rec.onerror = function () {
+      rec.onerror = function (event) {
         listening = false;
         setMood('error');
+        var code = ((event || {}).error || '').toString();
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+          keepListening = false;
+          setStatus('Micro bloqué: autorisez le micro dans le navigateur', false);
+        } else if (code === 'no-speech') {
+          setStatus('Je n ai rien entendu, réessayez', false);
+        } else {
+          setStatus('Micro indisponible temporairement', false);
+        }
         if (!keepListening) {
           micBtn.textContent = '🎙';
         }
@@ -486,8 +497,11 @@
       setVoiceMode(!voiceMode);
       if (voiceMode) {
         setStatus('Mode vocal actif', false);
-        keepListening = false;
+        keepListening = true;
+        setTimeout(startListening, 120);
       } else {
+        keepListening = false;
+        stopListening();
         setStatus('Mode écrit actif', false);
       }
     });
@@ -515,9 +529,17 @@
           'Content-Type': 'application/json',
           'X-WP-Nonce': cfg.nonce || ''
         },
-        body: JSON.stringify({ message: message })
+        body: JSON.stringify({
+          message: message,
+          session_id: chatSessionId,
+          page_url: window.location.href
+        })
       });
       var data = await res.json();
+      if (data && data.session_id) {
+        chatSessionId = String(data.session_id);
+        saveState();
+      }
       return data || {};
     }
 
@@ -537,11 +559,17 @@
             phone: lead.phone,
             intent: lead.intent,
             wants_rdv: !!lead.wantsRdv,
+            session_id: chatSessionId,
             page_url: window.location.href,
             transcript: transcript.join('\n')
           })
         });
-        return await res.json();
+        var data = await res.json();
+        if (data && data.session_id) {
+          chatSessionId = String(data.session_id);
+          saveState();
+        }
+        return data || { ok: false };
       } catch (e) {
         return { ok: false };
       }
@@ -935,7 +963,8 @@
         var raw = localStorage.getItem(STORAGE_KEY);
         if (raw) {
           var state = JSON.parse(raw);
-          if (state && Array.isArray(state.messages) && state.messages.length) {
+            if (state && Array.isArray(state.messages) && state.messages.length) {
+            chatSessionId = (state.session_id || '').toString();
             chatMessages = state.messages.slice(-80);
             thread.innerHTML = '';
             chatMessages.forEach(function (m) {

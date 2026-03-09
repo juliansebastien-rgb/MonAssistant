@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.0.7
+ * Version: 3.0.8
  * Author: Azertaf
  */
 
@@ -11,11 +11,12 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.0.6';
+    const VERSION = '3.0.8';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
     const OPTION_ADMIN_NOTES = 'azsa_admin_notes';
+    const OPTION_EVENTS = 'azsa_events';
     const OPTION_INDEX = 'azsa_index';
     const CRON_HOOK = 'azsa_rebuild_index_cron';
     const DEFAULT_ROBOT_LOGO_URL = 'https://monassistant.mapage-wp.online/wp-content/uploads/2026/03/MAP-logo-tete.gif';
@@ -262,6 +263,14 @@ final class AZSA_Plugin {
             'manage_options',
             'azsa-rdv',
             array(__CLASS__, 'render_rdv_page')
+        );
+        add_submenu_page(
+            'azsa-prospects',
+            'Événements',
+            'Événements',
+            'manage_options',
+            'azsa-events',
+            array(__CLASS__, 'render_events_page')
         );
         add_submenu_page(
             'azsa-prospects',
@@ -610,28 +619,54 @@ final class AZSA_Plugin {
         if ($action === '' || $ref === '') {
             return;
         }
+        if (!in_array($action, array('mark_callback_open', 'mark_callback_done', 'clear_callback', 'delete_lead'), true)) {
+            return;
+        }
         if (!wp_verify_nonce($nonce, 'azsa_lead_action_' . $ref)) {
             return;
         }
         $leads = self::get_leads();
         $changed = false;
-        foreach ($leads as &$lead) {
-            if ((string) ($lead['ref'] ?? '') !== $ref) {
-                continue;
+        if ($action === 'delete_lead') {
+            $before = count($leads);
+            $leads = array_values(array_filter($leads, function ($lead) use ($ref) {
+                return (string) ($lead['ref'] ?? '') !== $ref;
+            }));
+            $changed = (count($leads) !== $before);
+            if ($changed) {
+                self::log_event(self::normalize_owner_user_id(get_current_user_id()), 'admin', 'lead_deleted', array(
+                    'ref' => $ref,
+                ), '', $ref);
             }
-            if ($action === 'mark_callback_open') {
-                $lead['callback_status'] = 'open';
-                $changed = true;
-            } elseif ($action === 'mark_callback_done') {
-                $lead['callback_status'] = 'done';
-                $changed = true;
-            } elseif ($action === 'clear_callback') {
-                unset($lead['callback_status']);
-                $changed = true;
-            }
-            break;
         }
-        unset($lead);
+        if ($action !== 'delete_lead') {
+            foreach ($leads as &$lead) {
+                if ((string) ($lead['ref'] ?? '') !== $ref) {
+                    continue;
+                }
+                if ($action === 'mark_callback_open') {
+                    $lead['callback_status'] = 'open';
+                    $changed = true;
+                    self::log_event(self::normalize_owner_user_id(get_current_user_id()), 'admin', 'callback_open', array(
+                        'ref' => $ref,
+                    ), '', $ref);
+                } elseif ($action === 'mark_callback_done') {
+                    $lead['callback_status'] = 'done';
+                    $changed = true;
+                    self::log_event(self::normalize_owner_user_id(get_current_user_id()), 'admin', 'callback_done', array(
+                        'ref' => $ref,
+                    ), '', $ref);
+                } elseif ($action === 'clear_callback') {
+                    unset($lead['callback_status']);
+                    $changed = true;
+                    self::log_event(self::normalize_owner_user_id(get_current_user_id()), 'admin', 'callback_cleared', array(
+                        'ref' => $ref,
+                    ), '', $ref);
+                }
+                break;
+            }
+            unset($lead);
+        }
         if ($changed) {
             self::update_leads($leads);
         }
@@ -718,6 +753,27 @@ final class AZSA_Plugin {
             echo '<p>Aucun enregistrement pour le moment.</p>';
             return;
         }
+        echo '<style>
+.azsa-actions-stack{display:flex;flex-direction:column;align-items:flex-start;gap:6px;white-space:normal;min-width:170px}
+.azsa-actions-stack .button{margin:0!important}
+.azsa-actions-stack details{display:block!important}
+.azsa-actions-stack details summary.button{display:inline-block}
+.azsa-actions-stack .azsa-transcript{position:relative}
+.azsa-actions-stack .azsa-transcript-panel{
+    position:absolute;
+    left:0;
+    bottom:calc(100% + 6px);
+    z-index:50;
+    width:min(480px,70vw);
+    max-height:220px;
+    overflow:auto;
+    white-space:pre-wrap;
+    border:1px solid #dcdcde;
+    padding:8px;
+    background:#fff;
+    box-shadow:0 10px 24px rgba(0,0,0,.08)
+}
+</style>';
         echo '<table class="widefat striped"><thead><tr>';
         echo '<th>Réf</th><th>Date</th><th>Prénom</th><th>Nom</th><th>Email</th><th>Téléphone</th><th>Demande</th><th>Rappel</th><th>Actions rapides</th>';
         echo '</tr></thead><tbody>';
@@ -753,6 +809,12 @@ final class AZSA_Plugin {
                 'ref' => $ref_raw,
                 '_wpnonce' => $nonce,
             ), admin_url('admin.php'));
+            $delete_url = add_query_arg(array(
+                'page' => sanitize_text_field((string) ($_GET['page'] ?? 'azsa-prospects')),
+                'azsa_action' => 'delete_lead',
+                'ref' => $ref_raw,
+                '_wpnonce' => $nonce,
+            ), admin_url('admin.php'));
             echo '<tr>';
             echo '<td>' . $ref . '</td><td>' . $date . '</td><td>' . $first . '</td><td>' . $last . '</td><td>' . $email . '</td><td>' . $phone . '</td><td>' . esc_html($demand) . '</td>';
             echo '<td>';
@@ -764,28 +826,29 @@ final class AZSA_Plugin {
                 echo '<span style="display:inline-block;padding:3px 8px;border-radius:999px;background:#f0f0f1;color:#50575e;">-</span>';
             }
             echo '</td>';
-            echo '<td style="white-space:nowrap;">';
+            echo '<td><div class="azsa-actions-stack">';
             if ($callback_status !== 'open') {
-                echo '<a class="button button-small" href="' . esc_url($open_url) . '">Créer tâche rappel</a> ';
+                echo '<a class="button button-small" href="' . esc_url($open_url) . '">Créer tâche rappel</a>';
             }
             if ($callback_status === 'open') {
-                echo '<a class="button button-small" href="' . esc_url($done_url) . '">Rappel fait</a> ';
+                echo '<a class="button button-small" href="' . esc_url($done_url) . '">Rappel fait</a>';
             }
             if ($callback_status !== '') {
-                echo '<a class="button button-small" href="' . esc_url($clear_url) . '">Retirer</a> ';
+                echo '<a class="button button-small" href="' . esc_url($clear_url) . '">Retirer</a>';
             }
             if ($email_raw !== '') {
-                echo '<a class="button button-small" href="mailto:' . esc_attr($email_raw) . '">Email</a> ';
-                echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier email" data-copy="' . esc_attr($email_raw) . '">Copier email</button> ';
+                echo '<a class="button button-small" href="mailto:' . esc_attr($email_raw) . '">Email</a>';
+                echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier email" data-copy="' . esc_attr($email_raw) . '">Copier email</button>';
             }
             if ($phone_raw !== '') {
-                echo '<a class="button button-small" href="tel:' . esc_attr($phone_raw) . '">Appeler</a> ';
-                echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier tél" data-copy="' . esc_attr($phone_raw) . '">Copier tél</button> ';
+                echo '<a class="button button-small" href="tel:' . esc_attr($phone_raw) . '">Appeler</a>';
+                echo '<button type="button" class="button button-small azsa-copy-btn" data-label="Copier tél" data-copy="' . esc_attr($phone_raw) . '">Copier tél</button>';
             }
             if ($transcript !== '') {
-                echo '<details style="display:inline-block;vertical-align:middle;"><summary class="button button-small" style="cursor:pointer;">Transcript</summary><div style="margin-top:8px;max-width:480px;max-height:220px;overflow:auto;white-space:pre-wrap;border:1px solid #dcdcde;padding:8px;background:#fff;">' . $transcript . '</div></details>';
+                echo '<details class="azsa-transcript"><summary class="button button-small" style="cursor:pointer;">Transcript</summary><div class="azsa-transcript-panel">' . $transcript . '</div></details>';
             }
-            echo '</td>';
+            echo '<a class="button button-small" style="border-color:#b32d2e;color:#b32d2e;" href="' . esc_url($delete_url) . '" onclick="return confirm(\'Supprimer définitivement cet enregistrement ?\');">Supprimer</a>';
+            echo '</div></td>';
             echo '</tr>';
         }
         echo '</tbody></table>';
@@ -853,6 +916,77 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         self::render_leads_filters_form('azsa-rdv', $filters);
         self::render_leads_table($leads);
         echo '</div>';
+    }
+
+    public static function render_events_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $owner_user_id = self::normalize_owner_user_id(get_current_user_id());
+        $actor = sanitize_key((string) ($_GET['actor'] ?? ''));
+        $event_type = sanitize_key((string) ($_GET['event_type'] ?? ''));
+        $session_id = self::sanitize_session_id((string) ($_GET['session_id'] ?? ''));
+        $contact_ref = sanitize_text_field((string) ($_GET['contact_ref'] ?? ''));
+
+        $events = array_values(array_filter(self::get_events_raw(), function ($ev) use ($owner_user_id, $actor, $event_type, $session_id, $contact_ref) {
+            if (self::normalize_owner_user_id((int) ($ev['owner_user_id'] ?? 0)) !== $owner_user_id) {
+                return false;
+            }
+            if ($actor !== '' && sanitize_key((string) ($ev['actor'] ?? '')) !== $actor) {
+                return false;
+            }
+            if ($event_type !== '' && sanitize_key((string) ($ev['event_type'] ?? '')) !== $event_type) {
+                return false;
+            }
+            if ($session_id !== '' && self::sanitize_session_id((string) ($ev['session_id'] ?? '')) !== $session_id) {
+                return false;
+            }
+            if ($contact_ref !== '' && sanitize_text_field((string) ($ev['contact_ref'] ?? '')) !== $contact_ref) {
+                return false;
+            }
+            return true;
+        }));
+        $events = array_slice($events, 0, 300);
+
+        echo '<div class="wrap"><h1>Événements</h1>';
+        echo '<p>Historique des sessions et actions (visiteur, assistant, admin).</p>';
+        echo '<form method="get" style="margin:0 0 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:end;">';
+        echo '<input type="hidden" name="page" value="azsa-events"/>';
+        echo '<div><label for="azsa_ev_actor">Acteur</label><br/><input id="azsa_ev_actor" type="text" name="actor" value="' . esc_attr($actor) . '" placeholder="visitor / assistant / admin"/></div>';
+        echo '<div><label for="azsa_ev_type">Type</label><br/><input id="azsa_ev_type" type="text" name="event_type" value="' . esc_attr($event_type) . '" placeholder="visitor_chat_user_message"/></div>';
+        echo '<div><label for="azsa_ev_sess">Session</label><br/><input id="azsa_ev_sess" type="text" name="session_id" value="' . esc_attr($session_id) . '" placeholder="visitor_..."/></div>';
+        echo '<div><label for="azsa_ev_ref">Ref contact</label><br/><input id="azsa_ev_ref" type="text" name="contact_ref" value="' . esc_attr($contact_ref) . '" placeholder="LEAD-..."/></div>';
+        echo '<div><button class="button button-primary" type="submit">Filtrer</button></div>';
+        echo '<div><a class="button" href="' . esc_url(admin_url('admin.php?page=azsa-events')) . '">Réinitialiser</a></div>';
+        echo '</form>';
+
+        if (empty($events)) {
+            echo '<p>Aucun événement trouvé.</p></div>';
+            return;
+        }
+
+        echo '<table class="widefat striped"><thead><tr>';
+        echo '<th>Date</th><th>Acteur</th><th>Type</th><th>Session</th><th>Ref</th><th>Données</th>';
+        echo '</tr></thead><tbody>';
+        foreach ($events as $ev) {
+            $data_decoded = json_decode((string) ($ev['data'] ?? '{}'), true);
+            if (!is_array($data_decoded)) {
+                $data_decoded = array('raw' => (string) ($ev['data'] ?? ''));
+            }
+            $json = wp_json_encode($data_decoded, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+            if (!is_string($json)) {
+                $json = '{}';
+            }
+            echo '<tr>';
+            echo '<td>' . esc_html(self::format_date_short((string) ($ev['created_at'] ?? ''))) . '</td>';
+            echo '<td>' . esc_html((string) ($ev['actor'] ?? '')) . '</td>';
+            echo '<td>' . esc_html((string) ($ev['event_type'] ?? '')) . '</td>';
+            echo '<td style="max-width:220px;word-break:break-all;">' . esc_html((string) ($ev['session_id'] ?? '')) . '</td>';
+            echo '<td>' . esc_html((string) ($ev['contact_ref'] ?? '')) . '</td>';
+            echo '<td style="max-width:420px;"><pre style="white-space:pre-wrap;margin:0;">' . esc_html($json) . '</pre></td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table></div>';
     }
 
     public static function register_rest() {
@@ -1316,9 +1450,9 @@ body{margin:0;background:#f1f6fb;font-family:Raleway,Segoe UI,Arial,sans-serif;c
 .ma-ai-stage{padding:8px 14px 12px}
 .ma-ai-stage__inner{max-width:1120px;margin:0 auto}
 .ma-ai-layout{width:100%;display:grid;grid-template-columns:minmax(320px,1fr) minmax(360px,1fr);gap:20px;align-items:stretch}
-.ma-ai-left{position:relative;min-height:520px;height:520px;max-height:520px;overflow:visible;background:transparent}
+.ma-ai-left{position:relative;min-height:520px;height:520px;max-height:520px;overflow:visible;background:transparent!important}
 .ma-ai-particles{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:.9;z-index:4}
-.ma-ai-character{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:2}
+.ma-ai-character{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:2;background:transparent!important}
 .ma-ai-chat{position:relative;min-height:520px;height:520px;max-height:520px;border:1px solid rgba(18,61,100,.16);border-radius:18px;background:rgba(255,255,255,.84);box-shadow:0 12px 36px rgba(18,61,100,.10);padding:14px;display:flex;flex-direction:column;gap:10px}
 .ma-ai-chat-head{margin:0 0 2px}
 .ma-ai-chat-title{margin:0;color:#123d64;font-size:17px;font-weight:700}
@@ -1404,7 +1538,7 @@ var defaultGif=(c.character_gif_url||'').trim()||characterGifs.idle;
 character.src=defaultGif;
 character.onerror=function(){if(character.src!==defaultGif){character.src=defaultGif;}};
 
-var lastRef='',voiceMode=false,recognizer=null,listening=false,keepListening=false,currentAudio=null,processing=false;
+var lastRef='',chatSessionId='',voiceMode=false,recognizer=null,listening=false,keepListening=false,currentAudio=null,processing=false;
 function setMood(m){if(characterGifs[m]){character.src=characterGifs[m];}}
 function setStatus(text,thinking){statusNode.textContent=text||'';statusNode.classList.toggle('is-thinking',!!thinking);}
 function pushMessage(role,text){
@@ -1483,7 +1617,7 @@ function setupRecognizer(){
   var rr=new SR();
   rr.lang=(c.lang||'fr')==='fr'?'fr-FR':'en-US';
   rr.interimResults=false;
-  rr.continuous=false;
+  rr.continuous=true;
   rr.maxAlternatives=1;
   rr.onstart=function(){listening=true;setMood('listening');micBtn.textContent='⏹';setStatus('Écoute en cours',true);};
   rr.onresult=function(ev){
@@ -1503,14 +1637,27 @@ function setupRecognizer(){
       setStatus('Prêt',false);
     }
   };
-  rr.onerror=function(){setMood('error');listening=false;micBtn.textContent='🎙';};
+  rr.onerror=function(ev){
+    setMood('error');
+    listening=false;
+    var code=((ev||{}).error||'').toString();
+    if(code==='not-allowed'||code==='service-not-allowed'){
+      keepListening=false;
+      setStatus('Micro bloqué: autorisez le micro',false);
+    }else if(code==='no-speech'){
+      setStatus('Je n ai rien entendu',false);
+    }else{
+      setStatus('Micro indisponible temporairement',false);
+    }
+    micBtn.textContent='🎙';
+  };
   return rr;
 }
 async function ask(msg){
   var res=await fetch(c.endpoint,{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({owner_id:c.owner_id,token:c.token,message:msg,last_contact_ref:lastRef})
+    body:JSON.stringify({owner_id:c.owner_id,token:c.token,message:msg,last_contact_ref:lastRef,session_id:chatSessionId})
   });
   return await res.json();
 }
@@ -1526,6 +1673,8 @@ modeBtn.addEventListener('click',async function(){
     setMood('idle');
     return;
   }
+  keepListening=true;
+  setTimeout(function(){ if(recognizer&&!listening){ try{recognizer.start();}catch(e){} } },120);
   var msg='Mode vocal activé. Je vous écoute.';
   if(thread.children.length>1){msg='Je réactive le mode vocal. Dites-moi comment je peux vous aider.';}
   pushMessage('assistant',msg);
@@ -1559,6 +1708,7 @@ form.addEventListener('submit',async function(e){
     var rep=(d&&d.reply)?d.reply:'Je n ai pas pu traiter la demande.';
     pushMessage('assistant',rep);
     if(d&&d.last_contact_ref){lastRef=d.last_contact_ref;}
+    if(d&&d.session_id){chatSessionId=String(d.session_id);}
     if(d&&Array.isArray(d.suggestions)){setSuggestions(d.suggestions.slice(0,4));}
     if(voiceMode){await speak(rep);}
     setMood('idle');
@@ -1569,6 +1719,9 @@ form.addEventListener('submit',async function(e){
     setStatus('Erreur',false);
   }
   processing=false;
+  if(voiceMode&&keepListening&&recognizer&&!listening){
+    setTimeout(function(){try{recognizer.start();}catch(e){}},240);
+  }
 });
 
 function initParticles(){
@@ -1621,6 +1774,65 @@ HTML;
         exit;
     }
 
+    public static function sanitize_session_id($value) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
+        $value = preg_replace('/[^a-zA-Z0-9\-_]/', '', $value);
+        if ($value === null) {
+            return '';
+        }
+        return substr($value, 0, 64);
+    }
+
+    public static function create_session_id($prefix = 'sess') {
+        $prefix = preg_replace('/[^a-zA-Z0-9]/', '', (string) $prefix);
+        if ($prefix === '') {
+            $prefix = 'sess';
+        }
+        try {
+            $rand = bin2hex(random_bytes(8));
+        } catch (Exception $e) {
+            $rand = wp_generate_password(16, false, false);
+        }
+        return $prefix . '_' . gmdate('YmdHis') . '_' . $rand;
+    }
+
+    public static function get_events_raw() {
+        $raw = get_option(self::OPTION_EVENTS, array());
+        return is_array($raw) ? $raw : array();
+    }
+
+    public static function log_event($owner_user_id, $actor, $event_type, $data = array(), $session_id = '', $contact_ref = '') {
+        $owner_user_id = self::normalize_owner_user_id((int) $owner_user_id);
+        $actor = sanitize_key((string) $actor);
+        $event_type = sanitize_key((string) $event_type);
+        $session_id = self::sanitize_session_id($session_id);
+        $contact_ref = sanitize_text_field((string) $contact_ref);
+        if (!is_array($data)) {
+            $data = array();
+        }
+        $data_json = wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (!is_string($data_json)) {
+            $data_json = '{}';
+        }
+        $events = self::get_events_raw();
+        array_unshift($events, array(
+            'created_at' => gmdate('c'),
+            'owner_user_id' => $owner_user_id,
+            'actor' => $actor,
+            'event_type' => $event_type,
+            'session_id' => $session_id,
+            'contact_ref' => $contact_ref,
+            'data' => $data_json,
+        ));
+        if (count($events) > 5000) {
+            $events = array_slice($events, 0, 5000);
+        }
+        update_option(self::OPTION_EVENTS, $events, false);
+    }
+
     public static function get_admin_notes() {
         $raw = get_option(self::OPTION_ADMIN_NOTES, array());
         return is_array($raw) ? $raw : array();
@@ -1646,6 +1858,9 @@ HTML;
         ));
         $all[(string) $owner_user_id][$contact_ref] = array_slice($all[(string) $owner_user_id][$contact_ref], 0, 40);
         update_option(self::OPTION_ADMIN_NOTES, $all, false);
+        self::log_event($owner_user_id, 'admin', 'admin_note_added', array(
+            'note' => self::smart_trim($note_text, 320),
+        ), '', $contact_ref);
     }
 
     public static function get_contact_notes($owner_user_id, $contact_ref) {
@@ -1780,10 +1995,17 @@ HTML;
             return new WP_REST_Response(array('reply' => 'Accès refusé.'), 403);
         }
         $message = trim((string) $request->get_param('message'));
+        $session_id = self::sanitize_session_id((string) $request->get_param('session_id'));
+        if ($session_id === '') {
+            $session_id = self::create_session_id('admin');
+        }
         $last_contact_ref = sanitize_text_field((string) $request->get_param('last_contact_ref'));
         if ($message === '') {
             return new WP_REST_Response(array('reply' => 'Message vide.'), 400);
         }
+        self::log_event($owner_user_id, 'admin', 'admin_chat_user_message', array(
+            'message' => self::smart_trim($message, 500),
+        ), $session_id, $last_contact_ref);
 
         $leads = self::get_leads($owner_user_id);
         $lower = strtolower($message);
@@ -1868,18 +2090,31 @@ HTML;
                 . "Vous pouvez me demander: dernières actions, fiche d’un contact, numéro d’un contact, ou enregistrer une note.";
         }
 
+        self::log_event($owner_user_id, 'assistant', 'admin_chat_assistant_reply', array(
+            'reply' => self::smart_trim($reply, 700),
+        ), $session_id, $out_ref);
         return new WP_REST_Response(array(
             'reply' => $reply,
             'suggestions' => $suggestions,
             'last_contact_ref' => $out_ref,
+            'session_id' => $session_id,
         ), 200);
     }
 
     public static function rest_chat(WP_REST_Request $request) {
         $message = trim((string) $request->get_param('message'));
+        $session_id = self::sanitize_session_id((string) $request->get_param('session_id'));
+        if ($session_id === '') {
+            $session_id = self::create_session_id('visitor');
+        }
+        $owner_user_id = self::normalize_owner_user_id((int) get_current_user_id());
         if ($message === '') {
             return new WP_REST_Response(array('reply' => 'Message vide.'), 400);
         }
+        self::log_event($owner_user_id, 'visitor', 'visitor_chat_user_message', array(
+            'message' => self::smart_trim($message, 500),
+            'page_url' => esc_url_raw((string) $request->get_param('page_url')),
+        ), $session_id);
 
         $index = get_option(self::OPTION_INDEX, array());
         $docs = isset($index['docs']) && is_array($index['docs']) ? $index['docs'] : array();
@@ -1906,12 +2141,16 @@ HTML;
             $suggestions = self::local_suggestions($message, $hits, $reply);
         }
 
+        self::log_event($owner_user_id, 'assistant', 'visitor_chat_assistant_reply', array(
+            'reply' => self::smart_trim($reply, 700),
+        ), $session_id);
         return new WP_REST_Response(array(
             'reply' => $reply,
             'suggestions' => $suggestions,
             'sources' => array_map(function ($d) {
                 return array('title' => $d['title'], 'url' => $d['url']);
             }, $hits),
+            'session_id' => $session_id,
         ), 200);
     }
 
@@ -2065,6 +2304,10 @@ HTML;
         $page_url = esc_url_raw((string) $request->get_param('page_url'));
         $intent = sanitize_text_field((string) $request->get_param('intent'));
         $wants_rdv = (bool) $request->get_param('wants_rdv');
+        $session_id = self::sanitize_session_id((string) $request->get_param('session_id'));
+        if ($session_id === '') {
+            $session_id = self::create_session_id('visitor');
+        }
 
         if (($email === '' || !is_email($email)) && !$wants_rdv) {
             return new WP_REST_Response(array('ok' => false, 'message' => 'Email invalide.'), 400);
@@ -2089,6 +2332,7 @@ HTML;
             'wants_rdv' => $wants_rdv ? 1 : 0,
             'page_url' => $page_url,
             'transcript' => $transcript,
+            'session_id' => $session_id,
         );
 
         $leads = self::get_all_leads_raw();
@@ -2152,8 +2396,22 @@ HTML;
             ));
             self::send_html_mail($admin_email, '[Lead] ' . $ref . ' - ' . $email, $admin_html, $customer_text);
         }
+        self::log_event($owner_user_id, 'visitor', 'lead_saved', array(
+            'first_name' => $first_name,
+            'last_name' => $last_name,
+            'email' => $email,
+            'phone' => $phone,
+            'intent' => $intent,
+            'wants_rdv' => $wants_rdv ? 1 : 0,
+            'page_url' => $page_url,
+        ), $session_id, $ref);
+        if ($wants_rdv) {
+            self::log_event($owner_user_id, 'visitor', 'phone_call_requested', array(
+                'intent' => $intent,
+            ), $session_id, $ref);
+        }
 
-        return new WP_REST_Response(array('ok' => true, 'ref' => $ref), 200);
+        return new WP_REST_Response(array('ok' => true, 'ref' => $ref, 'session_id' => $session_id), 200);
     }
 
     public static function send_html_mail($to, $subject, $html, $text_fallback = '') {
@@ -2249,7 +2507,8 @@ HTML;
         }
 
         $system = "Tu es un assistant expert du site web. Réponds en français (sauf demande explicite), ton clair, naturel, ponctué, avec accents corrects. "
-            . "Base-toi uniquement sur les extraits fournis. Si info manquante: dis-le clairement. "
+            . "Base-toi strictement sur les extraits fournis et ne fabrique rien. Si le sujet n'est pas clairement présent dans les extraits: dis-le explicitement. "
+            . "Ne redirige pas vers des offres/formations hors sujet. Si un nom précis est demandé (ex: Amadeus), confirme d'abord sa présence dans les extraits; sinon indique que l'information n'est pas disponible sur cette base. "
             . "Tu dois produire STRICTEMENT du JSON valide avec ce schéma: "
             . "{\"reply\":\"texte réponse utile\",\"suggestions\":[\"question courte 1\",\"question courte 2\",\"question courte 3\"]}. "
             . "Les suggestions doivent être contextuelles à la question et à ta réponse, max 3 à 4 mots chacune, sans URL, sans ponctuation finale.";
@@ -2391,14 +2650,23 @@ HTML;
 
     public static function search_docs($message, $docs, $limit = 5) {
         $tokens = self::tokens($message);
+        $query_norm = self::normalize_text_for_search($message);
         $scored = array();
 
         foreach ($docs as $doc) {
-            $haystack = strtolower(($doc['title'] ?? '') . ' ' . ($doc['content'] ?? ''));
+            $title = (string) ($doc['title'] ?? '');
+            $content = (string) ($doc['content'] ?? '');
+            $haystack = self::normalize_text_for_search($title . ' ' . $content);
             $score = 0;
+            if ($query_norm !== '' && strpos($haystack, $query_norm) !== false) {
+                $score += 14;
+            }
             foreach ($tokens as $t) {
                 if ($t !== '' && strpos($haystack, $t) !== false) {
-                    $score += 2;
+                    $score += 3;
+                    if (strpos(self::normalize_text_for_search($title), $t) !== false) {
+                        $score += 4;
+                    }
                 }
             }
             if ($score > 0) {
@@ -2415,17 +2683,36 @@ HTML;
     }
 
     public static function tokens($text) {
-        $text = strtolower(wp_strip_all_tags((string) $text));
+        $text = self::normalize_text_for_search($text);
         $parts = preg_split('/[^\p{L}\p{N}]+/u', $text);
         $out = array();
+        $stop = array(
+            'les' => true, 'des' => true, 'une' => true, 'dans' => true, 'avec' => true, 'pour' => true,
+            'est' => true, 'sont' => true, 'sur' => true, 'que' => true, 'qui' => true, 'quoi' => true,
+            'comment' => true, 'vous' => true, 'nous' => true, 'site' => true, 'monassistant' => true,
+            'assistant' => true, 'chatbot' => true, 'this' => true, 'that' => true, 'from' => true,
+        );
         foreach ((array) $parts as $p) {
             $p = trim((string) $p);
             if ($p === '' || strlen($p) < 3) {
                 continue;
             }
+            if (isset($stop[$p])) {
+                continue;
+            }
             $out[$p] = true;
         }
         return array_keys($out);
+    }
+
+    public static function normalize_text_for_search($text) {
+        $text = wp_strip_all_tags((string) $text);
+        if (function_exists('remove_accents')) {
+            $text = remove_accents($text);
+        }
+        $text = strtolower($text);
+        $text = preg_replace('/\s+/', ' ', (string) $text);
+        return trim((string) $text);
     }
 
     public static function smart_trim($text, $max = 1200) {
