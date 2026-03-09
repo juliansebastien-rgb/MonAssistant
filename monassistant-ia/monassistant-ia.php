@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.7.2
+ * Version: 3.7.3
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.7.2';
+    const VERSION = '3.7.3';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -1990,11 +1990,11 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             return '';
         }
         $norm = self::normalize_search_text($input);
-        $looks_like_compose = (bool) preg_match('/\b(fais|fait|redige|r[eé]dige|ecris|écris|prepare|prépare|envoie|envoyer|mail|email)\b/u', $norm);
-        if ($looks_like_compose) {
-            return self::ai_compose_email_body($input, $settings);
+        $looks_like_polish = (bool) preg_match('/\b(corrige|correction|orthographe|grammaire|ponctuation)\b/u', $norm);
+        if ($looks_like_polish) {
+            return self::ai_polish_french_text($input, $settings);
         }
-        return self::ai_polish_french_text($input, $settings);
+        return self::ai_compose_email_body($input, $settings);
     }
 
     public static function extract_email_body_from_message($message) {
@@ -3660,6 +3660,11 @@ HTML;
         );
     }
 
+    public static function get_last_contact_ref_for_owner($owner_user_id) {
+        $ctx = self::get_last_admin_chat_context($owner_user_id);
+        return sanitize_text_field((string) ($ctx['last_contact_ref'] ?? ''));
+    }
+
     public static function get_admin_chat_state_raw() {
         $raw = get_option(self::OPTION_ADMIN_CHAT_STATE, array());
         return is_array($raw) ? $raw : array();
@@ -4146,6 +4151,13 @@ HTML;
                 $out_ref = $ctx_ref;
             }
         }
+        if ($last_contact_ref === '') {
+            $fallback_ref = self::get_last_contact_ref_for_owner($owner_user_id);
+            if ($fallback_ref !== '') {
+                $last_contact_ref = $fallback_ref;
+                $out_ref = $fallback_ref;
+            }
+        }
         $settings = self::get_settings($owner_user_id);
         self::sync_global_rules_from_master(false, $settings);
         $ai_intent = self::admin_ai_intent($message, $last_contact_ref, $settings);
@@ -4370,8 +4382,23 @@ HTML;
                 }
                 self::clear_admin_chat_state($owner_user_id, $session_id);
             } elseif (self::text_is_no($message)) {
-                self::clear_admin_chat_state($owner_user_id, $session_id);
-                $reply = "D’accord, envoi annulé.";
+                $mnorm = self::normalize_search_text($message);
+                $tokens = array_values(array_filter(explode(' ', $mnorm)));
+                if (count($tokens) <= 3) {
+                    self::clear_admin_chat_state($owner_user_id, $session_id);
+                    $reply = "D’accord, envoi annulé.";
+                } else {
+                    $body = self::build_email_body_from_admin_input($message, $settings);
+                    $subject = trim((string) ($admin_state['subject'] ?? 'Message de suivi'));
+                    self::set_admin_chat_state($owner_user_id, $session_id, array(
+                        'await' => 'email_confirm',
+                        'ref' => $target_ref,
+                        'subject' => $subject,
+                        'body' => $body,
+                    ));
+                    $reply = "Message mis à jour pour " . ((string) ($contact['email'] ?? 'ce contact')) . ":\n\nObjet: " . $subject . "\nMessage: " . $body . "\n\nConfirmez l’envoi ? (Oui/Non)";
+                    $out_ref = $target_ref;
+                }
             } else {
                 $reply = "Confirmez l’envoi par Oui ou annulez par Non.";
             }
@@ -4623,6 +4650,19 @@ HTML;
             if (empty($contact['ref']) && $last_contact_ref !== '') {
                 $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
             }
+            if (empty($contact['ref']) && $out_ref !== '') {
+                $contact = self::find_contact_by_query($leads, '', $out_ref);
+            }
+            if (empty($contact['ref'])) {
+                $owner_last_ref = self::get_last_contact_ref_for_owner($owner_user_id);
+                if ($owner_last_ref !== '') {
+                    $contact = self::find_contact_by_query($leads, '', $owner_last_ref);
+                    if (!empty($contact['ref'])) {
+                        $last_contact_ref = $owner_last_ref;
+                        $out_ref = $owner_last_ref;
+                    }
+                }
+            }
             if (empty($contact['ref'])) {
                 self::set_admin_chat_state($owner_user_id, $session_id, array(
                     'await' => 'email_target',
@@ -4638,7 +4678,7 @@ HTML;
                         'await' => 'email_content',
                         'ref' => $out_ref,
                     ));
-                    $reply = "Quel contenu voulez-vous envoyer par email ? Je corrigerai le texte avant confirmation.";
+                    $reply = "Quel contenu voulez-vous envoyer par email ? Je rédigerai un message prêt à envoyer avant confirmation.";
                 } else {
                     $body = self::build_email_body_from_admin_input($body_raw, $settings);
                     $subject = 'Message de suivi';
