@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.1.2
+ * Version: 3.1.3
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.1.2';
+    const VERSION = '3.1.3';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -259,8 +259,8 @@ final class AZSA_Plugin {
         );
         add_submenu_page(
             'azsa-prospects',
-            'Événements',
-            'Événements',
+            'Conversations / Logs',
+            'Conversations / Logs',
             'manage_options',
             'azsa-events',
             array(__CLASS__, 'render_events_page')
@@ -948,6 +948,122 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         return implode(' | ', array_slice($parts, 0, 6));
     }
 
+    public static function is_conversation_log_event($event_type) {
+        $event_type = sanitize_key((string) $event_type);
+        if ($event_type === '') {
+            return false;
+        }
+        if (strpos($event_type, 'chat_') !== false || strpos($event_type, '_chat_') !== false) {
+            return true;
+        }
+        return in_array($event_type, array(
+            'admin_ai_router_used',
+        ), true);
+    }
+
+    public static function is_contact_action_event($event_type) {
+        $event_type = sanitize_key((string) $event_type);
+        if ($event_type === '') {
+            return false;
+        }
+        if (self::is_conversation_log_event($event_type)) {
+            return false;
+        }
+        return in_array($event_type, array(
+            'admin_note_added',
+            'callback_open',
+            'callback_done',
+            'callback_cleared',
+            'lead_saved',
+            'lead_deleted',
+            'phone_call_requested',
+            'contact_phone_updated',
+            'intent_add_note',
+            'intent_update_phone',
+            'intent_send_email',
+            'intent_send_sms',
+            'intent_call_phone',
+            'intent_receive_call',
+            'intent_whatsapp',
+            'intent_book_rdv',
+            'intent_cancel_rdv',
+            // Reserved for upcoming automations:
+            'email_sent',
+            'sms_sent',
+            'call_outbound',
+            'call_inbound',
+            'whatsapp_sent',
+            'whatsapp_received',
+            'rdv_booked',
+            'rdv_cancelled',
+        ), true);
+    }
+
+    public static function format_event_label($event_type) {
+        $event_type = sanitize_key((string) $event_type);
+        $map = array(
+            'admin_note_added' => 'Note ajoutée',
+            'callback_open' => 'Rappel à faire',
+            'callback_done' => 'Rappel effectué',
+            'callback_cleared' => 'Rappel retiré',
+            'lead_saved' => 'Fiche enregistrée',
+            'lead_deleted' => 'Fiche supprimée',
+            'phone_call_requested' => 'Demande d’appel',
+            'contact_phone_updated' => 'Téléphone mis à jour',
+            'intent_add_note' => 'Intention: ajouter une note',
+            'intent_update_phone' => 'Intention: modifier téléphone',
+            'intent_send_email' => 'Intention: envoyer un email',
+            'intent_send_sms' => 'Intention: envoyer un SMS',
+            'intent_call_phone' => 'Intention: appeler',
+            'intent_receive_call' => 'Intention: appel entrant',
+            'intent_whatsapp' => 'Intention: WhatsApp',
+            'intent_book_rdv' => 'Intention: prise de RDV',
+            'intent_cancel_rdv' => 'Intention: annulation RDV',
+            'email_sent' => 'Email envoyé',
+            'sms_sent' => 'SMS envoyé',
+            'call_outbound' => 'Appel sortant',
+            'call_inbound' => 'Appel entrant',
+            'whatsapp_sent' => 'WhatsApp envoyé',
+            'whatsapp_received' => 'WhatsApp reçu',
+            'rdv_booked' => 'RDV pris',
+            'rdv_cancelled' => 'RDV annulé',
+        );
+        return isset($map[$event_type]) ? $map[$event_type] : $event_type;
+    }
+
+    public static function detect_important_intent_event($message, $ai_action = '') {
+        $m = self::normalize_search_text($message);
+        $ai_action = sanitize_key((string) $ai_action);
+        if ($ai_action === 'add_note') {
+            return 'intent_add_note';
+        }
+        if ($ai_action === 'update_phone') {
+            return 'intent_update_phone';
+        }
+        if (strpos($m, 'email') !== false || strpos($m, 'mail') !== false) {
+            return 'intent_send_email';
+        }
+        if (strpos($m, 'sms') !== false) {
+            return 'intent_send_sms';
+        }
+        if (strpos($m, 'whatsapp') !== false || strpos($m, 'whats app') !== false) {
+            return 'intent_whatsapp';
+        }
+        if (strpos($m, 'appel entrant') !== false || strpos($m, 'recoi') !== false) {
+            return 'intent_receive_call';
+        }
+        if (strpos($m, 'appel') !== false || strpos($m, 'telephone') !== false || strpos($m, 'tel') !== false) {
+            return 'intent_call_phone';
+        }
+        if (strpos($m, 'annul') !== false && strpos($m, 'rdv') !== false) {
+            return 'intent_cancel_rdv';
+        }
+        if (strpos($m, 'rdv') !== false || strpos($m, 'rendez vous') !== false || strpos($m, 'rendez-vous') !== false) {
+            return 'intent_book_rdv';
+        }
+        return '';
+    }
+
     public static function get_contact_timeline($owner_user_id, $lead) {
         $owner_user_id = self::normalize_owner_user_id($owner_user_id);
         $ref = sanitize_text_field((string) ($lead['ref'] ?? ''));
@@ -972,6 +1088,13 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             return $ta <=> $tb;
         });
         return $events;
+    }
+
+    public static function get_contact_action_timeline($owner_user_id, $lead) {
+        $timeline = self::get_contact_timeline($owner_user_id, $lead);
+        return array_values(array_filter($timeline, function ($ev) {
+            return self::is_contact_action_event((string) ($ev['event_type'] ?? ''));
+        }));
     }
 
     public static function group_timeline_conversations($events, $idle_seconds = 600) {
@@ -1058,6 +1181,9 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             if (self::normalize_owner_user_id((int) ($ev['owner_user_id'] ?? 0)) !== $owner_user_id) {
                 return false;
             }
+            if (!self::is_conversation_log_event((string) ($ev['event_type'] ?? ''))) {
+                return false;
+            }
             if ($actor !== '' && sanitize_key((string) ($ev['actor'] ?? '')) !== $actor) {
                 return false;
             }
@@ -1074,8 +1200,8 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         }));
         $events = array_slice($events, 0, 300);
 
-        echo '<div class="wrap"><h1>Événements</h1>';
-        echo '<p>Liste unique des événements (visiteurs, assistants, admins, RDV, actions CRM).</p>';
+        echo '<div class="wrap"><h1>Conversations / Logs</h1>';
+        echo '<p>Historique des échanges et logs conversationnels (admin/visiteur/assistant).</p>';
         echo '<form method="get" style="margin:0 0 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:end;">';
         echo '<input type="hidden" name="page" value="azsa-events"/>';
         echo '<div><label for="azsa_ev_actor">Acteur</label><br/><input id="azsa_ev_actor" type="text" name="actor" value="' . esc_attr($actor) . '" placeholder="visitor / assistant / admin"/></div>';
@@ -1176,46 +1302,34 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         echo '<a class="button button-small" href="' . esc_url(admin_url('admin.php?page=azsa-prospects')) . '">Retour contacts</a>';
         echo '</div>';
 
-        $timeline = self::get_contact_timeline($owner_user_id, $lead);
-        echo '<h2 style="margin:12px 0 8px;">Historique chronologique</h2>';
+        $timeline = self::get_contact_action_timeline($owner_user_id, $lead);
+        echo '<h2 style="margin:12px 0 8px;">Événements importants</h2>';
         if (empty($timeline)) {
-            echo '<p>Aucun événement pour ce contact.</p></div>';
+            echo '<p>Aucun événement important pour ce contact.</p></div>';
             return;
         }
-        $conversations = self::group_timeline_conversations($timeline, 600);
         echo '<div style="display:flex;flex-direction:column;gap:10px;max-width:960px;">';
-        $idx = 1;
-        foreach ($conversations as $conv) {
-            $first = $conv[0];
-            $last = $conv[count($conv) - 1];
-            $first_ts = strtotime((string) ($first['created_at'] ?? '')) ?: 0;
-            $last_ts = strtotime((string) ($last['created_at'] ?? '')) ?: 0;
-            $range = ($first_ts && $last_ts)
-                ? (gmdate('d/m/y H:i', $first_ts) . ' → ' . gmdate('H:i', $last_ts))
-                : self::format_date_short((string) ($first['created_at'] ?? ''));
-
+        foreach ($timeline as $ev) {
+            $when_ts = strtotime((string) ($ev['created_at'] ?? '')) ?: 0;
+            $when = $when_ts ? gmdate('d/m/y H:i', $when_ts) : self::format_date_short((string) ($ev['created_at'] ?? ''));
+            $label = self::format_event_label((string) ($ev['event_type'] ?? ''));
+            $actor = (string) ($ev['actor'] ?? '');
+            $data_text = self::event_data_to_text($ev);
             echo '<article style="background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:12px 14px;box-shadow:0 1px 2px rgba(0,0,0,.03);">';
             echo '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 8px;">';
-            echo '<div style="font-weight:700;color:#123d64;">Conversation #' . (int) $idx . '</div>';
+            echo '<div style="font-weight:700;color:#123d64;">' . esc_html($label) . '</div>';
             echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
-            echo '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#eef6ff;color:#123d64;font-size:12px;">' . esc_html($range) . '</span>';
-            echo '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#f0f4f8;color:#29455f;font-size:12px;">' . (int) count($conv) . ' événements</span>';
-            echo '</div></div>';
-            echo '<div style="display:flex;flex-direction:column;gap:6px;">';
-            foreach ($conv as $ev) {
-                $data_text = self::event_data_to_text($ev);
-                $meta = trim((string) ($ev['actor'] ?? '') . ' · ' . (string) ($ev['event_type'] ?? ''));
-                $when_ts = strtotime((string) ($ev['created_at'] ?? '')) ?: 0;
-                $when = $when_ts ? gmdate('H:i', $when_ts) : self::format_date_short((string) ($ev['created_at'] ?? ''));
-                echo '<div style="border-left:3px solid #dbe7f3;padding:4px 0 4px 8px;">';
-                echo '<div style="font-size:12px;color:#637b93;">' . esc_html($when) . ' · ' . esc_html($meta) . '</div>';
-                if ($data_text !== '') {
-                    echo '<div style="color:#1f2f3d;line-height:1.45;">' . esc_html($data_text) . '</div>';
-                }
-                echo '</div>';
+            echo '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#eef6ff;color:#123d64;font-size:12px;">' . esc_html($when) . '</span>';
+            if ($actor !== '') {
+                echo '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#f0f4f8;color:#29455f;font-size:12px;">' . esc_html($actor) . '</span>';
             }
-            echo '</div></article>';
-            $idx++;
+            echo '</div></div>';
+            if ($data_text !== '') {
+                echo '<div style="color:#1f2f3d;line-height:1.45;">' . esc_html($data_text) . '</div>';
+            } else {
+                echo '<div style="color:#6b7280;line-height:1.45;">Aucun détail complémentaire.</div>';
+            }
+            echo '</article>';
         }
         echo '</div>';
         echo "<script>
@@ -2389,6 +2503,12 @@ HTML;
         $ai_target = (string) ($ai_intent['target'] ?? '');
         $ai_note = (string) ($ai_intent['note'] ?? '');
         $ai_phone = preg_replace('/[^0-9+\s().-]/', '', (string) ($ai_intent['phone'] ?? ''));
+        $important_event_type = self::detect_important_intent_event($message, $ai_action);
+        if ($important_event_type !== '') {
+            self::log_event($owner_user_id, 'admin', $important_event_type, array(
+                'message' => self::smart_trim($message, 240),
+            ), $session_id, $last_contact_ref);
+        }
 
         if ($reply === '' && in_array($ai_action, array('get_contact', 'add_note', 'update_phone', 'list_actions', 'list_events', 'summary'), true)) {
             $target = $ai_target;
