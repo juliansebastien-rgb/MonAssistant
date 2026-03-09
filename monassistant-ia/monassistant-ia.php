@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.4
+ * Version: 3.6.5
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.4';
+    const VERSION = '3.6.5';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -3025,7 +3025,7 @@ HTML;
         }
         $q = self::normalize_search_text($message);
         // Remove intent words so we keep only potential contact identifiers.
-        $q = preg_replace('/\b(donne|moi|la|le|les|fiche|du|de|des|contact|numero|numeros|numeros|telephone|tel|stp|svp|pour|du|d)\b/', ' ', (string) $q);
+        $q = preg_replace('/\b(donne|moi|la|le|les|fiche|du|de|des|contact|numero|numeros|numeros|telephone|tel|stp|svp|pour|du|d|appel|appelle|appelles|appeler|appelez)\b/', ' ', (string) $q);
         $q = preg_replace('/\s+/', ' ', (string) $q);
         return trim((string) $q);
     }
@@ -3455,7 +3455,7 @@ HTML;
             }
         }
 
-        if ($reply === '' && (preg_match('/\\b(appel|appeler|appelez|telephone|t[eé]l)\\b/iu', $message) || preg_match('/\\bcoup\\s+de\\s+fil\\b/iu', $message)) && !preg_match('/\\b(recu|reçu|entrant)\\b/iu', $message)) {
+        if ($reply === '' && (preg_match('/\\b(appel|appelle|appelles|appeler|appelez|telephone|t[eé]l)\\b/iu', $message) || preg_match('/\\bcoup\\s+de\\s+fil\\b/iu', $message)) && !preg_match('/\\b(recu|reçu|entrant)\\b/iu', $message)) {
             $query = self::extract_named_contact_from_message($message);
             if ($query === '') {
                 $query = self::extract_contact_query($message);
