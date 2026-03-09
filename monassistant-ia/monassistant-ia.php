@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.7.0
+ * Version: 3.7.1
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.7.0';
+    const VERSION = '3.7.1';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -20,6 +20,7 @@ final class AZSA_Plugin {
     const OPTION_EVENTS = 'azsa_events';
     const OPTION_INDEX = 'azsa_index';
     const OPTION_GLOBAL_RULES = 'azsa_global_rules';
+    const OPTION_AI_RULE_SUGGESTIONS = 'azsa_ai_rule_suggestions';
     const CRON_HOOK = 'azsa_rebuild_index_cron';
     const CRON_SYNC_GLOBAL_RULES = 'azsa_sync_global_rules_cron';
     const DEFAULT_ROBOT_LOGO_URL = 'https://monassistant.mapage-wp.online/wp-content/uploads/2026/03/MAP-logo-tete.gif';
@@ -125,9 +126,192 @@ final class AZSA_Plugin {
         return array(
             'rules' => array_values(array_slice(array_unique($rules), 0, 80)),
             'overrides' => array_values(array_slice($overrides, 0, 80)),
+            'rulebook' => !empty($raw['rulebook']) && is_array($raw['rulebook']) ? array_values($raw['rulebook']) : array(),
             'updated_at' => sanitize_text_field((string) ($raw['updated_at'] ?? '')),
             'source' => sanitize_key((string) ($raw['source'] ?? 'local')),
         );
+    }
+
+    public static function normalize_rulebook($rulebook) {
+        $out = array();
+        foreach ((array) $rulebook as $r) {
+            if (!is_array($r)) {
+                continue;
+            }
+            $id = sanitize_text_field((string) ($r['id'] ?? ''));
+            if ($id === '') {
+                try {
+                    $id = 'R-' . substr(bin2hex(random_bytes(4)), 0, 8);
+                } catch (Exception $e) {
+                    $id = 'R-' . wp_generate_password(8, false, false);
+                }
+            }
+            $text = trim(wp_strip_all_tags((string) ($r['text'] ?? '')));
+            if ($text === '') {
+                continue;
+            }
+            $status = sanitize_key((string) ($r['status'] ?? 'active'));
+            if (!in_array($status, array('active', 'inactive'), true)) {
+                $status = 'active';
+            }
+            $source = sanitize_key((string) ($r['source'] ?? 'manual'));
+            $priority = (int) ($r['priority'] ?? 50);
+            if ($priority < 0) {
+                $priority = 0;
+            }
+            if ($priority > 100) {
+                $priority = 100;
+            }
+            $created_at = sanitize_text_field((string) ($r['created_at'] ?? gmdate('c')));
+            $updated_at = sanitize_text_field((string) ($r['updated_at'] ?? gmdate('c')));
+            $out[] = array(
+                'id' => $id,
+                'text' => $text,
+                'status' => $status,
+                'source' => $source,
+                'priority' => $priority,
+                'created_at' => $created_at,
+                'updated_at' => $updated_at,
+            );
+        }
+        return array_values(array_slice($out, 0, 300));
+    }
+
+    public static function get_ai_rulebook() {
+        $raw = self::get_global_rules_raw();
+        $rulebook = self::normalize_rulebook(isset($raw['rulebook']) ? $raw['rulebook'] : array());
+        if (empty($rulebook) && !empty($raw['rules']) && is_array($raw['rules'])) {
+            foreach ($raw['rules'] as $txt) {
+                $rulebook[] = array(
+                    'id' => 'R-legacy-' . substr(md5((string) $txt), 0, 8),
+                    'text' => trim((string) $txt),
+                    'status' => 'active',
+                    'source' => 'legacy',
+                    'priority' => 50,
+                    'created_at' => gmdate('c'),
+                    'updated_at' => gmdate('c'),
+                );
+            }
+            $rulebook = self::normalize_rulebook($rulebook);
+            self::save_rulebook($rulebook);
+        }
+        usort($rulebook, function ($a, $b) {
+            $pa = (int) ($a['priority'] ?? 50);
+            $pb = (int) ($b['priority'] ?? 50);
+            if ($pa !== $pb) {
+                return $pb <=> $pa;
+            }
+            return strcmp((string) ($a['id'] ?? ''), (string) ($b['id'] ?? ''));
+        });
+        return $rulebook;
+    }
+
+    public static function save_rulebook($rulebook) {
+        $raw = self::get_global_rules_raw();
+        $raw['rulebook'] = self::normalize_rulebook($rulebook);
+        $active_texts = array();
+        foreach ($raw['rulebook'] as $r) {
+            if (($r['status'] ?? 'active') === 'active') {
+                $active_texts[] = (string) ($r['text'] ?? '');
+            }
+        }
+        $raw['rules'] = array_values(array_slice(array_unique(array_filter(array_map('trim', $active_texts))), 0, 80));
+        $raw['updated_at'] = gmdate('c');
+        update_option(self::OPTION_GLOBAL_RULES, $raw, false);
+        return $raw;
+    }
+
+    public static function add_ai_rule($text, $source = 'manual', $status = 'active', $priority = 50) {
+        $text = trim(wp_strip_all_tags((string) $text));
+        if ($text === '') {
+            return false;
+        }
+        $rulebook = self::get_ai_rulebook();
+        foreach ($rulebook as $r) {
+            if (self::normalize_search_text((string) ($r['text'] ?? '')) === self::normalize_search_text($text)) {
+                return (string) ($r['id'] ?? '');
+            }
+        }
+        try {
+            $id = 'R-' . substr(bin2hex(random_bytes(4)), 0, 8);
+        } catch (Exception $e) {
+            $id = 'R-' . wp_generate_password(8, false, false);
+        }
+        $rulebook[] = array(
+            'id' => $id,
+            'text' => $text,
+            'status' => in_array($status, array('active', 'inactive'), true) ? $status : 'active',
+            'source' => sanitize_key((string) $source),
+            'priority' => max(0, min(100, (int) $priority)),
+            'created_at' => gmdate('c'),
+            'updated_at' => gmdate('c'),
+        );
+        self::save_rulebook($rulebook);
+        return $id;
+    }
+
+    public static function set_ai_rule_status($rule_id, $status) {
+        $rule_id = sanitize_text_field((string) $rule_id);
+        $status = sanitize_key((string) $status);
+        if ($rule_id === '' || !in_array($status, array('active', 'inactive'), true)) {
+            return false;
+        }
+        $rulebook = self::get_ai_rulebook();
+        $changed = false;
+        foreach ($rulebook as &$r) {
+            if ((string) ($r['id'] ?? '') !== $rule_id) {
+                continue;
+            }
+            $r['status'] = $status;
+            $r['updated_at'] = gmdate('c');
+            $changed = true;
+            break;
+        }
+        unset($r);
+        if ($changed) {
+            self::save_rulebook($rulebook);
+        }
+        return $changed;
+    }
+
+    public static function delete_ai_rule($rule_id) {
+        $rule_id = sanitize_text_field((string) $rule_id);
+        if ($rule_id === '') {
+            return false;
+        }
+        $rulebook = self::get_ai_rulebook();
+        $before = count($rulebook);
+        $rulebook = array_values(array_filter($rulebook, function ($r) use ($rule_id) {
+            return (string) ($r['id'] ?? '') !== $rule_id;
+        }));
+        if (count($rulebook) !== $before) {
+            self::save_rulebook($rulebook);
+            return true;
+        }
+        return false;
+    }
+
+    public static function get_ai_rule_suggestions() {
+        $raw = get_option(self::OPTION_AI_RULE_SUGGESTIONS, array());
+        return is_array($raw) ? array_values($raw) : array();
+    }
+
+    public static function save_ai_rule_suggestions($items) {
+        $clean = array();
+        foreach ((array) $items as $it) {
+            if (!is_array($it)) {
+                continue;
+            }
+            $clean[] = array(
+                'id' => sanitize_text_field((string) ($it['id'] ?? '')),
+                'type' => sanitize_key((string) ($it['type'] ?? 'suggestion')),
+                'title' => sanitize_text_field((string) ($it['title'] ?? 'Suggestion')),
+                'reason' => sanitize_text_field((string) ($it['reason'] ?? '')),
+                'rule_ids' => !empty($it['rule_ids']) && is_array($it['rule_ids']) ? array_values(array_map('sanitize_text_field', $it['rule_ids'])) : array(),
+                'proposed_text' => trim(wp_strip_all_tags((string) ($it['proposed_text'] ?? ''))),
+            );
+        }
+        update_option(self::OPTION_AI_RULE_SUGGESTIONS, array_values(array_slice($clean, 0, 100)), false);
     }
 
     public static function save_global_rules($rules, $source = 'local', $overrides = null) {
@@ -142,13 +326,21 @@ final class AZSA_Plugin {
             $existing = self::get_global_rules_raw();
             $overrides = isset($existing['overrides']) && is_array($existing['overrides']) ? $existing['overrides'] : array();
         }
+        $existing = self::get_global_rules_raw();
+        $rulebook = isset($existing['rulebook']) && is_array($existing['rulebook']) ? self::normalize_rulebook($existing['rulebook']) : array();
         $payload = array(
             'rules' => array_values(array_slice(array_unique($clean), 0, 80)),
             'overrides' => is_array($overrides) ? array_values(array_slice($overrides, 0, 80)) : array(),
+            'rulebook' => $rulebook,
             'updated_at' => gmdate('c'),
             'source' => sanitize_key((string) $source),
         );
         update_option(self::OPTION_GLOBAL_RULES, $payload, false);
+        if (!empty($clean)) {
+            foreach ($clean as $txt) {
+                self::add_ai_rule($txt, $source === 'remote' ? 'sync' : 'manual', 'active', 50);
+            }
+        }
         return $payload;
     }
 
@@ -157,6 +349,7 @@ final class AZSA_Plugin {
         if ($rule === '') {
             return false;
         }
+        self::add_ai_rule($rule, 'feedback', 'active', 60);
         $raw = self::get_global_rules_raw();
         $rules = (array) ($raw['rules'] ?? array());
         if (!in_array($rule, $rules, true)) {
@@ -294,7 +487,16 @@ final class AZSA_Plugin {
         $data = self::is_master_site()
             ? self::get_global_rules_raw()
             : self::sync_global_rules_from_master(false, $settings);
-        $rules = isset($data['rules']) && is_array($data['rules']) ? $data['rules'] : array();
+        $rulebook = self::get_ai_rulebook();
+        $rules = array();
+        foreach ($rulebook as $r) {
+            if (($r['status'] ?? 'active') === 'active') {
+                $rules[] = (string) ($r['text'] ?? '');
+            }
+        }
+        if (empty($rules)) {
+            $rules = isset($data['rules']) && is_array($data['rules']) ? $data['rules'] : array();
+        }
         if (empty($rules)) {
             return '';
         }
@@ -517,6 +719,14 @@ final class AZSA_Plugin {
             'manage_options',
             'azsa-events',
             array(__CLASS__, 'render_events_page')
+        );
+        add_submenu_page(
+            'azsa-prospects',
+            'Règles IA',
+            'Règles IA',
+            'manage_options',
+            'azsa-ai-rules',
+            array(__CLASS__, 'render_ai_rules_page')
         );
         add_submenu_page(
             'azsa-prospects',
@@ -749,6 +959,240 @@ final class AZSA_Plugin {
             </div>
         </div>
         <?php
+    }
+
+    public static function analyze_ai_rules_coherence($settings = array()) {
+        $rules = self::get_ai_rulebook();
+        $active = array_values(array_filter($rules, function ($r) {
+            return (($r['status'] ?? 'active') === 'active') && !empty($r['text']);
+        }));
+        $suggestions = array();
+
+        // Lightweight local duplicate detector as fallback.
+        for ($i = 0; $i < count($active); $i++) {
+            for ($j = $i + 1; $j < count($active); $j++) {
+                $a = self::normalize_search_text((string) ($active[$i]['text'] ?? ''));
+                $b = self::normalize_search_text((string) ($active[$j]['text'] ?? ''));
+                if ($a !== '' && $b !== '' && ($a === $b || strpos($a, $b) !== false || strpos($b, $a) !== false)) {
+                    $suggestions[] = array(
+                        'id' => 'S-' . substr(md5($a . '|' . $b), 0, 8),
+                        'type' => 'duplicate',
+                        'title' => 'Fusion suggérée',
+                        'reason' => 'Règles très proches détectées',
+                        'rule_ids' => array((string) ($active[$i]['id'] ?? ''), (string) ($active[$j]['id'] ?? '')),
+                        'proposed_text' => (string) ($active[$i]['text'] ?? ''),
+                    );
+                }
+            }
+        }
+
+        $api_key = trim((string) ($settings['api_key'] ?? ''));
+        if ($api_key === '' && defined('ANTHROPIC_API_KEY')) {
+            $api_key = (string) ANTHROPIC_API_KEY;
+        }
+        if ($api_key !== '' && !empty($active)) {
+            $ctx = array();
+            foreach (array_slice($active, 0, 80) as $r) {
+                $ctx[] = '- ' . (string) ($r['id'] ?? '') . ': ' . (string) ($r['text'] ?? '');
+            }
+            $payload = array(
+                'model' => $settings['model'] ?: 'claude-sonnet-4-20250514',
+                'max_tokens' => 700,
+                'temperature' => 0.1,
+                'system' => "Tu es un auditeur de règles. Retourne STRICTEMENT un JSON valide: "
+                    . "{\"suggestions\":[{\"type\":\"duplicate|conflict|rewrite\",\"title\":\"...\",\"reason\":\"...\",\"rule_ids\":[\"R-...\"],\"proposed_text\":\"...\"}]}.",
+                'messages' => array(
+                    array(
+                        'role' => 'user',
+                        'content' => array(
+                            array(
+                                'type' => 'text',
+                                'text' => "Analyse la cohérence de ces règles:\n" . implode("\n", $ctx),
+                            ),
+                        ),
+                    ),
+                ),
+            );
+            $res = wp_remote_post('https://api.anthropic.com/v1/messages', array(
+                'timeout' => 25,
+                'headers' => array(
+                    'x-api-key' => $api_key,
+                    'anthropic-version' => '2023-06-01',
+                    'content-type' => 'application/json',
+                ),
+                'body' => wp_json_encode($payload),
+            ));
+            if (!is_wp_error($res) && (int) wp_remote_retrieve_response_code($res) < 300) {
+                $body = json_decode((string) wp_remote_retrieve_body($res), true);
+                $txt = '';
+                if (is_array($body) && !empty($body['content']) && is_array($body['content'])) {
+                    foreach ($body['content'] as $c) {
+                        if (($c['type'] ?? '') === 'text') {
+                            $txt .= (string) ($c['text'] ?? '');
+                        }
+                    }
+                }
+                $dec = json_decode(trim((string) $txt), true);
+                if (!is_array($dec) && preg_match('/\{.*\}/s', (string) $txt, $m)) {
+                    $dec = json_decode((string) $m[0], true);
+                }
+                if (is_array($dec) && !empty($dec['suggestions']) && is_array($dec['suggestions'])) {
+                    foreach ($dec['suggestions'] as $s) {
+                        if (!is_array($s)) {
+                            continue;
+                        }
+                        $suggestions[] = array(
+                            'id' => 'S-' . substr(md5(wp_json_encode($s) . microtime(true)), 0, 8),
+                            'type' => sanitize_key((string) ($s['type'] ?? 'rewrite')),
+                            'title' => sanitize_text_field((string) ($s['title'] ?? 'Suggestion')),
+                            'reason' => sanitize_text_field((string) ($s['reason'] ?? '')),
+                            'rule_ids' => !empty($s['rule_ids']) && is_array($s['rule_ids']) ? array_values(array_map('sanitize_text_field', $s['rule_ids'])) : array(),
+                            'proposed_text' => trim(wp_strip_all_tags((string) ($s['proposed_text'] ?? ''))),
+                        );
+                    }
+                }
+            }
+        }
+        $suggestions = array_values(array_slice($suggestions, 0, 80));
+        self::save_ai_rule_suggestions($suggestions);
+        return $suggestions;
+    }
+
+    public static function apply_ai_rule_suggestion($suggestion_id) {
+        $suggestion_id = sanitize_text_field((string) $suggestion_id);
+        if ($suggestion_id === '') {
+            return false;
+        }
+        $list = self::get_ai_rule_suggestions();
+        $target = null;
+        $remain = array();
+        foreach ($list as $s) {
+            if ($target === null && (string) ($s['id'] ?? '') === $suggestion_id) {
+                $target = $s;
+                continue;
+            }
+            $remain[] = $s;
+        }
+        if (!is_array($target)) {
+            return false;
+        }
+        $text = trim((string) ($target['proposed_text'] ?? ''));
+        if ($text !== '') {
+            self::add_ai_rule($text, 'ai_agent', 'active', 70);
+        }
+        $ids = !empty($target['rule_ids']) && is_array($target['rule_ids']) ? $target['rule_ids'] : array();
+        foreach ($ids as $rid) {
+            self::set_ai_rule_status((string) $rid, 'inactive');
+        }
+        self::save_ai_rule_suggestions($remain);
+        return true;
+    }
+
+    public static function render_ai_rules_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $owner_user_id = self::get_runtime_owner_user_id();
+        $settings = self::get_settings($owner_user_id);
+
+        if (isset($_GET['azsa_rule_action'])) {
+            $action = sanitize_key((string) $_GET['azsa_rule_action']);
+            $rule_id = sanitize_text_field((string) ($_GET['rule_id'] ?? ''));
+            $nonce = sanitize_text_field((string) ($_GET['_wpnonce'] ?? ''));
+            if (wp_verify_nonce($nonce, 'azsa_rule_action_' . $rule_id)) {
+                if ($action === 'activate') {
+                    self::set_ai_rule_status($rule_id, 'active');
+                } elseif ($action === 'deactivate') {
+                    self::set_ai_rule_status($rule_id, 'inactive');
+                } elseif ($action === 'delete') {
+                    self::delete_ai_rule($rule_id);
+                }
+            }
+        }
+        if (isset($_GET['azsa_rule_apply'])) {
+            $sid = sanitize_text_field((string) $_GET['azsa_rule_apply']);
+            $nonce = sanitize_text_field((string) ($_GET['_wpnonce'] ?? ''));
+            if (wp_verify_nonce($nonce, 'azsa_rule_apply_' . $sid)) {
+                self::apply_ai_rule_suggestion($sid);
+            }
+        }
+        if (isset($_POST['azsa_new_rule']) && check_admin_referer('azsa_new_rule_nonce', 'azsa_new_rule_nonce')) {
+            $txt = trim((string) ($_POST['rule_text'] ?? ''));
+            if ($txt !== '') {
+                self::add_ai_rule($txt, 'manual', 'active', 60);
+                echo '<div class="notice notice-success"><p>Règle ajoutée.</p></div>';
+            }
+        }
+        if (isset($_POST['azsa_analyze_rules']) && check_admin_referer('azsa_analyze_rules_nonce', 'azsa_analyze_rules_nonce')) {
+            self::analyze_ai_rules_coherence($settings);
+            echo '<div class="notice notice-success"><p>Analyse de cohérence terminée.</p></div>';
+        }
+
+        $rulebook = self::get_ai_rulebook();
+        $suggestions = self::get_ai_rule_suggestions();
+        echo '<div class="wrap"><h1>Règles IA</h1>';
+        echo '<p>Règles alimentées par feedback, édition manuelle et suggestions IA.</p>';
+        echo '<form method="post" style="margin:10px 0 16px;display:flex;gap:8px;align-items:center;">';
+        wp_nonce_field('azsa_new_rule_nonce', 'azsa_new_rule_nonce');
+        echo '<input type="text" name="rule_text" style="min-width:460px" placeholder="Nouvelle règle..." />';
+        echo '<button type="submit" name="azsa_new_rule" class="button button-primary">Ajouter</button>';
+        echo '</form>';
+        echo '<form method="post" style="margin:0 0 16px;">';
+        wp_nonce_field('azsa_analyze_rules_nonce', 'azsa_analyze_rules_nonce');
+        echo '<button type="submit" name="azsa_analyze_rules" class="button">Analyser la cohérence</button>';
+        echo '</form>';
+
+        echo '<h2>Liste des règles</h2>';
+        if (empty($rulebook)) {
+            echo '<p>Aucune règle.</p>';
+        } else {
+            echo '<table class="widefat striped"><thead><tr><th>ID</th><th>Règle</th><th>Statut</th><th>Source</th><th>Priorité</th><th>Actions</th></tr></thead><tbody>';
+            foreach ($rulebook as $r) {
+                $id = (string) ($r['id'] ?? '');
+                $nonce = wp_create_nonce('azsa_rule_action_' . $id);
+                $activate = add_query_arg(array('page' => 'azsa-ai-rules', 'azsa_rule_action' => 'activate', 'rule_id' => $id, '_wpnonce' => $nonce), admin_url('admin.php'));
+                $deactivate = add_query_arg(array('page' => 'azsa-ai-rules', 'azsa_rule_action' => 'deactivate', 'rule_id' => $id, '_wpnonce' => $nonce), admin_url('admin.php'));
+                $delete = add_query_arg(array('page' => 'azsa-ai-rules', 'azsa_rule_action' => 'delete', 'rule_id' => $id, '_wpnonce' => $nonce), admin_url('admin.php'));
+                echo '<tr>';
+                echo '<td>' . esc_html($id) . '</td>';
+                echo '<td>' . esc_html((string) ($r['text'] ?? '')) . '</td>';
+                echo '<td>' . esc_html((string) ($r['status'] ?? 'active')) . '</td>';
+                echo '<td>' . esc_html((string) ($r['source'] ?? 'manual')) . '</td>';
+                echo '<td>' . esc_html((string) ($r['priority'] ?? 50)) . '</td>';
+                echo '<td>';
+                if ((string) ($r['status'] ?? 'active') === 'active') {
+                    echo '<a class="button button-small" href="' . esc_url($deactivate) . '">Désactiver</a> ';
+                } else {
+                    echo '<a class="button button-small button-primary" href="' . esc_url($activate) . '">Activer</a> ';
+                }
+                echo '<a class="button button-small" style="border-color:#b32d2e;color:#b32d2e;" href="' . esc_url($delete) . '">Supprimer</a>';
+                echo '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
+
+        echo '<h2 style="margin-top:20px;">Suggestions IA (cohérence)</h2>';
+        if (empty($suggestions)) {
+            echo '<p>Aucune suggestion pour le moment.</p>';
+        } else {
+            echo '<table class="widefat striped"><thead><tr><th>Type</th><th>Titre</th><th>Raison</th><th>Règles liées</th><th>Proposition</th><th>Action</th></tr></thead><tbody>';
+            foreach ($suggestions as $s) {
+                $sid = (string) ($s['id'] ?? '');
+                $n = wp_create_nonce('azsa_rule_apply_' . $sid);
+                $apply = add_query_arg(array('page' => 'azsa-ai-rules', 'azsa_rule_apply' => $sid, '_wpnonce' => $n), admin_url('admin.php'));
+                echo '<tr>';
+                echo '<td>' . esc_html((string) ($s['type'] ?? 'suggestion')) . '</td>';
+                echo '<td>' . esc_html((string) ($s['title'] ?? 'Suggestion')) . '</td>';
+                echo '<td>' . esc_html((string) ($s['reason'] ?? '')) . '</td>';
+                echo '<td>' . esc_html(implode(', ', (array) ($s['rule_ids'] ?? array()))) . '</td>';
+                echo '<td>' . esc_html((string) ($s['proposed_text'] ?? '')) . '</td>';
+                echo '<td><a class="button button-small button-primary" href="' . esc_url($apply) . '">Appliquer</a></td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
+        echo '</div>';
     }
 
     public static function get_all_leads_raw() {
@@ -1937,6 +2381,16 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
 
     public static function rest_global_rules(WP_REST_Request $request) {
         $data = self::get_global_rules_raw();
+        $rulebook = self::get_ai_rulebook();
+        $active = array();
+        foreach ($rulebook as $r) {
+            if (($r['status'] ?? 'active') === 'active' && !empty($r['text'])) {
+                $active[] = (string) $r['text'];
+            }
+        }
+        if (!empty($active)) {
+            $data['rules'] = array_values(array_slice(array_unique($active), 0, 80));
+        }
         return new WP_REST_Response(array(
             'site' => self::site_host(),
             'is_master' => self::is_master_site(),
