@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.1.5
+ * Version: 3.1.6
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.1.5';
+    const VERSION = '3.1.6';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -953,6 +953,9 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         if ($event_type === '') {
             return false;
         }
+        if (strpos($event_type, 'intent_') === 0) {
+            return true;
+        }
         if (strpos($event_type, 'chat_') !== false || strpos($event_type, '_chat_') !== false) {
             return true;
         }
@@ -978,20 +981,16 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'lead_deleted',
             'phone_call_requested',
             'contact_phone_updated',
-            'intent_add_note',
-            'intent_update_phone',
-            'intent_send_email',
-            'intent_send_sms',
-            'intent_call_phone',
-            'intent_receive_call',
-            'intent_whatsapp',
-            'intent_book_rdv',
-            'intent_cancel_rdv',
             // Reserved for upcoming automations:
             'email_sent',
+            'email_received',
             'sms_sent',
+            'sms_received',
             'call_outbound',
             'call_inbound',
+            'call_report',
+            'sms_report',
+            'whatsapp_report',
             'whatsapp_sent',
             'whatsapp_received',
             'rdv_booked',
@@ -1020,9 +1019,14 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'intent_book_rdv' => 'RDV',
             'intent_cancel_rdv' => 'RDV annulé',
             'email_sent' => 'Email envoyé',
+            'email_received' => 'Email reçu',
             'sms_sent' => 'SMS envoyé',
+            'sms_received' => 'SMS reçu',
             'call_outbound' => 'Appel sortant',
             'call_inbound' => 'Appel entrant',
+            'call_report' => 'Compte-rendu appel',
+            'sms_report' => 'Compte-rendu SMS',
+            'whatsapp_report' => 'Compte-rendu WhatsApp',
             'whatsapp_sent' => 'WhatsApp envoyé',
             'whatsapp_received' => 'WhatsApp reçu',
             'rdv_booked' => 'RDV pris',
@@ -1036,10 +1040,10 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         if (in_array($event_type, array('admin_note_added', 'intent_add_note'), true)) {
             return '📝';
         }
-        if (in_array($event_type, array('intent_send_email', 'email_sent'), true)) {
+        if (in_array($event_type, array('intent_send_email', 'email_sent', 'email_received'), true)) {
             return '✉️';
         }
-        if (in_array($event_type, array('intent_send_sms', 'sms_sent'), true)) {
+        if (in_array($event_type, array('intent_send_sms', 'sms_sent', 'sms_received'), true)) {
             return '💬';
         }
         if (in_array($event_type, array('intent_whatsapp', 'whatsapp_sent', 'whatsapp_received'), true)) {
@@ -1050,6 +1054,15 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         }
         if (in_array($event_type, array('intent_receive_call', 'call_inbound'), true)) {
             return '📲';
+        }
+        if ($event_type === 'call_report') {
+            return '🗒️';
+        }
+        if ($event_type === 'sms_report') {
+            return '🧾';
+        }
+        if ($event_type === 'whatsapp_report') {
+            return '📋';
         }
         if (in_array($event_type, array('intent_book_rdv', 'rdv_booked'), true)) {
             return '📅';
@@ -1079,6 +1092,12 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             $msg = trim((string) ($data['message'] ?? ''));
             if ($msg !== '') {
                 return self::smart_trim($msg, 260);
+            }
+        }
+        if (in_array($event_type, array('call_report', 'sms_report', 'whatsapp_report'), true)) {
+            $report = trim((string) ($data['report'] ?? $data['message'] ?? ''));
+            if ($report !== '') {
+                return self::smart_trim($report, 340);
             }
         }
         if ($event_type === 'contact_phone_updated') {
@@ -1200,12 +1219,40 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         return '';
     }
 
+    public static function extract_named_contact_from_message($message) {
+        $message = trim((string) $message);
+        if ($message === '') {
+            return '';
+        }
+        if (preg_match('/\\bcontact\\s+(.+?)(?:\\s*[:\\-]|$)/iu', $message, $m)) {
+            return trim((string) $m[1]);
+        }
+        if (preg_match('/\\bfiche\\s+(.+?)(?:\\s*[:\\-]|$)/iu', $message, $m)) {
+            return trim((string) $m[1]);
+        }
+        return '';
+    }
+
     public static function is_email_request_text($message) {
         $m = self::normalize_search_text($message);
         $compact = str_replace(' ', '', $m);
         $has_email = (strpos($m, 'email') !== false || strpos($m, 'mail') !== false || strpos($compact, 'email') !== false || strpos($compact, 'mail') !== false);
         $has_action = (bool) preg_match('/\b(envoi|envoyer|envoie|ecris|ecrit|redige|r[eé]dige|message)\b/u', $m);
         return $has_email && $has_action;
+    }
+
+    public static function is_sms_request_text($message) {
+        $m = self::normalize_search_text($message);
+        $has_sms = (strpos($m, 'sms') !== false || strpos($m, 'texto') !== false);
+        $has_action = (bool) preg_match('/\b(envoi|envoyer|envoie|ecris|ecrit|redige|r[eé]dige|message)\b/u', $m);
+        return $has_sms && $has_action;
+    }
+
+    public static function is_whatsapp_request_text($message) {
+        $m = self::normalize_search_text($message);
+        $has_whatsapp = (strpos($m, 'whatsapp') !== false || strpos($m, 'whats app') !== false || strpos($m, 'whatsap') !== false);
+        $has_action = (bool) preg_match('/\b(envoi|envoyer|envoie|ecris|ecrit|redige|r[eé]dige|message)\b/u', $m);
+        return $has_whatsapp && $has_action;
     }
 
     public static function get_contact_timeline($owner_user_id, $lead) {
@@ -1447,6 +1494,11 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         echo '</div>';
 
         $timeline = self::get_contact_action_timeline($owner_user_id, $lead);
+        usort($timeline, function ($a, $b) {
+            $ta = strtotime((string) ($a['created_at'] ?? '')) ?: 0;
+            $tb = strtotime((string) ($b['created_at'] ?? '')) ?: 0;
+            return $tb <=> $ta;
+        });
         echo '<h2 style="margin:12px 0 8px;">Événements importants</h2>';
         if (empty($timeline)) {
             echo '<p>Aucun événement important pour ce contact.</p></div>';
@@ -2122,6 +2174,14 @@ function setSuggestions(items){
     btn.className='ma-ai-suggest-btn';
     btn.textContent=String(label||'').trim();
     btn.addEventListener('click',function(){
+      if(/^tel:\+/i.test(btn.textContent)||/^tel:/i.test(btn.textContent)||/^sms:\+/i.test(btn.textContent)||/^sms:/i.test(btn.textContent)||/^mailto:/i.test(btn.textContent)){
+        window.location.href=btn.textContent;
+        return;
+      }
+      if(/^https?:\/\//i.test(btn.textContent)){
+        window.open(btn.textContent,'_blank');
+        return;
+      }
       input.value=btn.textContent;
       form.dispatchEvent(new Event('submit',{cancelable:true}));
     });
@@ -2858,6 +2918,59 @@ HTML;
             ), $session_id, $last_contact_ref);
         }
 
+        if ($reply === '' && (preg_match('/\\b(appel|appeler|appelez|telephone|t[eé]l)\\b/iu', $message) || preg_match('/\\bcoup\\s+de\\s+fil\\b/iu', $message)) && !preg_match('/\\b(recu|reçu|entrant)\\b/iu', $message)) {
+            $query = self::extract_named_contact_from_message($message);
+            if ($query === '') {
+                $query = self::extract_contact_query($message);
+            }
+            $contact = array();
+            if ($query !== '') {
+                $matches = self::find_contacts_by_query($leads, $query, 3);
+                if (count($matches) === 1) {
+                    $contact = $matches[0];
+                } elseif (count($matches) > 1) {
+                    $alts = array();
+                    foreach ($matches as $m) {
+                        $alts[] = (string) ($m['ref'] ?? '');
+                    }
+                    $reply = "J’ai trouvé plusieurs fiches possibles (" . implode(', ', array_filter($alts)) . "). Quelle référence voulez-vous ?";
+                    $suggestions = array_slice(array_filter($alts), 0, 4);
+                }
+            }
+            if ($reply === '' && empty($contact['ref']) && $last_contact_ref !== '') {
+                $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
+            }
+            if ($reply === '') {
+                if (empty($contact['ref'])) {
+                    $reply = "Je n’ai pas trouvé le contact à appeler. Donnez le nom, l’email ou la référence LEAD-...";
+                } else {
+                    $out_ref = (string) $contact['ref'];
+                    $phone = trim((string) ($contact['phone'] ?? ''));
+                    if ($phone === '') {
+                        $reply = "Ce contact n’a pas de numéro enregistré.";
+                    } else {
+                        $dial = preg_replace('/[^0-9+]/', '', $phone);
+                        if ($dial !== '' && $dial[0] !== '+') {
+                            $dial = '+' . $dial;
+                        }
+                        $reply = "Appel prêt pour " . $out_ref . " (" . $phone . "). Sur mobile, utilisez le bouton d’appel.";
+                        self::log_event($owner_user_id, 'admin', 'call_outbound', array(
+                            'phone' => $phone,
+                            'message' => self::smart_trim($message, 220),
+                        ), $session_id, $out_ref);
+                        self::set_admin_chat_state($owner_user_id, $session_id, array(
+                            'await' => 'call_report',
+                            'ref' => $out_ref,
+                        ));
+                        $suggestions = array('Noter le compte rendu', 'Voir la fiche en cours');
+                        if ($dial !== '') {
+                            array_unshift($suggestions, 'tel:' . $dial);
+                        }
+                    }
+                }
+            }
+        }
+
         if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'email_confirm' && !empty($admin_state['ref'])) {
             $target_ref = sanitize_text_field((string) $admin_state['ref']);
             $contact = self::find_contact_by_query($leads, $target_ref, $target_ref);
@@ -2927,6 +3040,184 @@ HTML;
                     'ref' => $out_ref,
                 ));
                 $reply = "Parfait. Quel contenu voulez-vous envoyer à " . (string) $contact['email'] . " ?";
+            }
+        }
+
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'call_report' && !empty($admin_state['ref'])) {
+            $target_ref = sanitize_text_field((string) $admin_state['ref']);
+            if (self::text_is_no($message) || preg_match('/\\b(annule|annuler|ignore|plus tard)\\b/iu', $message)) {
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $reply = "D’accord, compte-rendu d’appel ignoré.";
+            } else {
+                self::log_event($owner_user_id, 'admin', 'call_report', array(
+                    'report' => self::smart_trim($message, 500),
+                ), $session_id, $target_ref);
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $out_ref = $target_ref;
+                $reply = "Compte-rendu d’appel enregistré sur la fiche " . $target_ref . ".";
+                $suggestions = array('Voir la fiche en cours', 'Envoyer un SMS', 'Envoyer un email');
+            }
+        }
+
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'sms_report' && !empty($admin_state['ref'])) {
+            $target_ref = sanitize_text_field((string) $admin_state['ref']);
+            if (self::text_is_no($message) || preg_match('/\\b(annule|annuler|ignore|plus tard)\\b/iu', $message)) {
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $reply = "D’accord, compte-rendu SMS ignoré.";
+            } else {
+                self::log_event($owner_user_id, 'admin', 'sms_report', array(
+                    'report' => self::smart_trim($message, 500),
+                ), $session_id, $target_ref);
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $out_ref = $target_ref;
+                $reply = "Compte-rendu SMS enregistré sur la fiche " . $target_ref . ".";
+                $suggestions = array('Voir la fiche en cours', 'Envoyer un WhatsApp', 'Ajouter une note');
+            }
+        }
+
+        if ($reply === '' && !empty($admin_state['await']) && (string) $admin_state['await'] === 'whatsapp_report' && !empty($admin_state['ref'])) {
+            $target_ref = sanitize_text_field((string) $admin_state['ref']);
+            if (self::text_is_no($message) || preg_match('/\\b(annule|annuler|ignore|plus tard)\\b/iu', $message)) {
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $reply = "D’accord, compte-rendu WhatsApp ignoré.";
+            } else {
+                self::log_event($owner_user_id, 'admin', 'whatsapp_report', array(
+                    'report' => self::smart_trim($message, 500),
+                ), $session_id, $target_ref);
+                self::clear_admin_chat_state($owner_user_id, $session_id);
+                $out_ref = $target_ref;
+                $reply = "Compte-rendu WhatsApp enregistré sur la fiche " . $target_ref . ".";
+                $suggestions = array('Voir la fiche en cours', 'Envoyer un SMS', 'Ajouter une note');
+            }
+        }
+
+        if ($reply === '' && self::is_sms_request_text($message)) {
+            $query = self::extract_contact_query($message);
+            $contact = array();
+            if ($query !== '') {
+                $matches = self::find_contacts_by_query($leads, $query, 1);
+                if (!empty($matches[0])) {
+                    $contact = $matches[0];
+                }
+            }
+            if (empty($contact['ref']) && $last_contact_ref !== '') {
+                $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
+            }
+            if (empty($contact['ref'])) {
+                $reply = "Je n’ai pas trouvé le contact pour le SMS. Donnez le nom, l’email ou la référence LEAD-...";
+            } else {
+                $out_ref = (string) $contact['ref'];
+                $phone = trim((string) ($contact['phone'] ?? ''));
+                if ($phone === '') {
+                    $reply = "Ce contact n’a pas de numéro enregistré.";
+                } else {
+                    $dial = preg_replace('/[^0-9+]/', '', $phone);
+                    if ($dial !== '' && $dial[0] !== '+') {
+                        $dial = '+' . $dial;
+                    }
+                    self::set_admin_chat_state($owner_user_id, $session_id, array(
+                        'await' => 'sms_report',
+                        'ref' => $out_ref,
+                    ));
+                    self::log_event($owner_user_id, 'admin', 'sms_sent', array(
+                        'phone' => $phone,
+                        'message' => self::smart_trim($message, 220),
+                    ), $session_id, $out_ref);
+                    $reply = "SMS prêt pour " . $out_ref . " (" . $phone . "). Après l’envoi, collez le contenu envoyé pour archivage.";
+                    $suggestions = array('Noter le compte-rendu SMS', 'Voir la fiche en cours');
+                    if ($dial !== '') {
+                        array_unshift($suggestions, 'sms:' . $dial);
+                    }
+                }
+            }
+        }
+
+        if ($reply === '' && self::is_whatsapp_request_text($message)) {
+            $query = self::extract_contact_query($message);
+            $contact = array();
+            if ($query !== '') {
+                $matches = self::find_contacts_by_query($leads, $query, 1);
+                if (!empty($matches[0])) {
+                    $contact = $matches[0];
+                }
+            }
+            if (empty($contact['ref']) && $last_contact_ref !== '') {
+                $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
+            }
+            if (empty($contact['ref'])) {
+                $reply = "Je n’ai pas trouvé le contact pour WhatsApp. Donnez le nom, l’email ou la référence LEAD-...";
+            } else {
+                $out_ref = (string) $contact['ref'];
+                $phone = trim((string) ($contact['phone'] ?? ''));
+                if ($phone === '') {
+                    $reply = "Ce contact n’a pas de numéro enregistré.";
+                } else {
+                    $dial = preg_replace('/[^0-9]/', '', $phone);
+                    self::set_admin_chat_state($owner_user_id, $session_id, array(
+                        'await' => 'whatsapp_report',
+                        'ref' => $out_ref,
+                    ));
+                    self::log_event($owner_user_id, 'admin', 'whatsapp_sent', array(
+                        'phone' => $phone,
+                        'message' => self::smart_trim($message, 220),
+                    ), $session_id, $out_ref);
+                    $reply = "WhatsApp prêt pour " . $out_ref . " (" . $phone . "). Après l’envoi, collez le contenu envoyé pour archivage.";
+                    $suggestions = array('Noter le compte-rendu WhatsApp', 'Voir la fiche en cours');
+                    if ($dial !== '') {
+                        array_unshift($suggestions, 'https://wa.me/' . rawurlencode($dial));
+                    }
+                }
+            }
+        }
+
+        if ($reply === '' && preg_match('/\\b(email|mail|sms|whatsapp|appel)\\b/iu', $message) && preg_match('/[:\\-]/u', $message)) {
+            $event_type = '';
+            $mnorm = self::normalize_search_text($message);
+            if (strpos($mnorm, 'email') !== false || strpos($mnorm, 'mail') !== false) {
+                $event_type = (strpos($mnorm, 'recu') !== false || strpos($mnorm, 'recu') !== false) ? 'email_received' : 'email_sent';
+            } elseif (strpos($mnorm, 'sms') !== false) {
+                $event_type = (strpos($mnorm, 'recu') !== false || strpos($mnorm, 'recu') !== false) ? 'sms_received' : 'sms_sent';
+            } elseif (strpos($mnorm, 'whatsapp') !== false || strpos($mnorm, 'whats app') !== false) {
+                $event_type = (strpos($mnorm, 'recu') !== false || strpos($mnorm, 'recu') !== false) ? 'whatsapp_received' : 'whatsapp_sent';
+            } elseif (strpos($mnorm, 'appel') !== false) {
+                $event_type = (strpos($mnorm, 'recu') !== false || strpos($mnorm, 'entrant') !== false) ? 'call_inbound' : 'call_outbound';
+            }
+
+            if ($event_type !== '') {
+                $parts = preg_split('/[:\\-]/u', $message, 2);
+                $content = isset($parts[1]) ? trim((string) $parts[1]) : '';
+                $target_query = self::extract_named_contact_from_message($message);
+                if ($target_query === '') {
+                    $target_query = self::extract_contact_query($message);
+                }
+                $contact = array();
+                if ($target_query !== '') {
+                    $matches = self::find_contacts_by_query($leads, $target_query, 3);
+                    if (count($matches) === 1) {
+                        $contact = $matches[0];
+                    } elseif (count($matches) > 1) {
+                        $alts = array();
+                        foreach ($matches as $m) {
+                            $alts[] = (string) ($m['ref'] ?? '');
+                        }
+                        $reply = "J’ai trouvé plusieurs fiches possibles (" . implode(', ', array_filter($alts)) . "). Quelle référence voulez-vous ?";
+                        $suggestions = array_slice(array_filter($alts), 0, 4);
+                    }
+                } elseif ($last_contact_ref !== '') {
+                    $contact = self::find_contact_by_query($leads, '', $last_contact_ref);
+                }
+
+                if ($reply === '') {
+                    if (empty($contact['ref'])) {
+                        $reply = "Je n’ai pas trouvé ce contact. Sur quelle fiche voulez-vous enregistrer cet événement ?";
+                    } else {
+                        $out_ref = (string) $contact['ref'];
+                        self::log_event($owner_user_id, 'admin', $event_type, array(
+                            'message' => self::smart_trim($content !== '' ? $content : $message, 400),
+                        ), $session_id, $out_ref);
+                        $reply = "Événement enregistré sur la fiche " . $out_ref . ".";
+                    }
+                }
             }
         }
 
