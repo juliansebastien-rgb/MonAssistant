@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.0.6
+ * Version: 3.0.7
  * Author: Azertaf
  */
 
@@ -1290,6 +1290,7 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             wp_die('Accès refusé.');
         }
         $owner_user_id = self::normalize_owner_user_id($owner_user_id);
+        $settings = self::get_settings();
         $cfg = array(
             'owner_id' => $owner_user_id,
             'token' => $token,
@@ -1297,19 +1298,326 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'tts_url' => esc_url_raw(rest_url('azsa/v1/tts')),
             'site_name' => get_bloginfo('name'),
             'lang' => 'fr',
+            'character_gif_url' => (string) ($settings['character_gif_url'] ?? ''),
+            'gif_base_url' => (string) ($settings['character_gif_base_url'] ?? self::DEFAULT_GIF_BASE_URL),
         );
         status_header(200);
         nocache_headers();
         $cfg_json = wp_json_encode($cfg, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        echo '<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>'
-            . '<title>Assistant CRM IA</title>'
-            . '<style>body{margin:0;background:#f1f6fb;font-family:Raleway,Segoe UI,Arial,sans-serif;color:#123d64}.wrap{max-width:980px;margin:20px auto;padding:0 14px}.card{background:#fff;border:1px solid rgba(18,61,100,.14);border-radius:16px;overflow:hidden;box-shadow:0 8px 28px rgba(18,61,100,.12)}.azsa-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;background:linear-gradient(135deg,#123d64 0%,#1c6ea4 100%);color:#fff}.azsa-head h4{margin:0;font-size:15px;font-weight:700}.azsa-head small{display:block;opacity:.9;font-size:11px}.azsa-head-actions{display:flex;gap:6px;align-items:center}#azsa-admin-mode,#azsa-admin-mic{border:1px solid rgba(255,255,255,.28);border-radius:10px;background:rgba(255,255,255,.16);color:#fff;height:30px;font-size:11px;padding:0 9px;cursor:pointer}#azsa-admin-mic{width:34px;padding:0}.azsa-hidden{display:none!important}.thread{height:62vh;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px;background:linear-gradient(180deg,#f7fbff 0%,#ffffff 45%)}.row{display:flex}.u{justify-content:flex-end}.b{justify-content:flex-start}.bubble{max-width:86%;border-radius:14px;padding:9px 11px;font-size:14px;line-height:1.45;white-space:pre-wrap}.u .bubble{background:#123d64;color:#fff;border-bottom-right-radius:6px}.b .bubble{background:#edf6ff;color:#123d64;border:1px solid rgba(18,61,100,.14);border-bottom-left-radius:6px}.chips{display:flex;flex-wrap:wrap;gap:7px;padding:0 12px 8px}.chip{border:1px solid rgba(18,61,100,.18);background:#f4f9ff;color:#123d64;border-radius:999px;font-size:11px;padding:6px 10px;cursor:pointer}.status{padding:0 12px 8px;font-size:11px;color:rgba(18,61,100,.75)}.status.thinking{color:#1c6ea4;font-weight:700}.form{display:flex;gap:8px;align-items:center;padding:10px;border-top:1px solid rgba(18,61,100,.12);background:#fff}.form input{flex:1;min-width:0;border:1px solid rgba(18,61,100,.22);border-radius:12px;padding:9px 10px;font-size:14px;color:#123d64}.form button{border:1px solid rgba(18,61,100,.24);border-radius:12px;background:#123d64;color:#fff;padding:9px 12px;font-size:12px;font-weight:700;cursor:pointer}</style>'
-            . '</head><body><div class="wrap"><div class="card"><div class="azsa-head"><div><h4>Assistant CRM IA</h4><small>Connecté à '
-            . esc_html((string) $cfg['site_name'])
-            . '</small></div><div class="azsa-head-actions"><button id="azsa-admin-mode" type="button">Mode: Écrit</button><button id="azsa-admin-mic" type="button" class="azsa-hidden" aria-label="Activer micro">🎙</button></div></div><div class="thread" id="azsa-admin-thread"></div><div class="chips" id="azsa-admin-chips"></div><div class="status" id="azsa-admin-status">Prêt</div><form class="form" id="azsa-admin-form"><input id="azsa-admin-input" type="text" placeholder="Ex: donne moi la fiche du contact Sébastien"/><button type="submit">Envoyer</button></form></div></div>'
-            . '<script>window.AZSA_ADMIN=' . $cfg_json . ';</script>'
-            . '<script>(function(){var c=window.AZSA_ADMIN||{},t=document.getElementById("azsa-admin-thread"),f=document.getElementById("azsa-admin-form"),i=document.getElementById("azsa-admin-input"),s=document.getElementById("azsa-admin-status"),chips=document.getElementById("azsa-admin-chips"),modeBtn=document.getElementById("azsa-admin-mode"),micBtn=document.getElementById("azsa-admin-mic"),lastRef="",voiceMode=false,rec=null,listening=false,keepListening=false,currentAudio=null;function status(txt,th){s.textContent=txt||"";s.classList.toggle("thinking",!!th)}function row(role,text){var r=document.createElement("div");r.className="row "+(role==="user"?"u":"b");var b=document.createElement("div");b.className="bubble";b.textContent=text||"";r.appendChild(b);t.appendChild(r);t.scrollTop=t.scrollHeight}function setCh(arr){chips.innerHTML="";(arr||[]).forEach(function(x){var bt=document.createElement("button");bt.type="button";bt.className="chip";bt.textContent=x;bt.onclick=function(){i.value=x;f.dispatchEvent(new Event("submit",{cancelable:true}))};chips.appendChild(bt)})}function stopAudio(){if(currentAudio){try{currentAudio.pause()}catch(e){}currentAudio.src="";currentAudio=null}if(window.speechSynthesis){try{window.speechSynthesis.cancel()}catch(e){}}}async function fetchTTS(text){if(!c.tts_url)return{mode:"browser_tts"};try{var res=await fetch(c.tts_url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:text})});return await res.json()}catch(e){return{mode:"browser_tts"}}}function playBase64(m,b64){return new Promise(function(ok){stopAudio();try{var a=new Audio("data:"+(m||"audio/mpeg")+";base64,"+b64);currentAudio=a;a.onended=function(){ok(true)};a.onerror=function(){ok(false)};var p=a.play();if(p&&p.catch)p.catch(function(){ok(false)})}catch(e){ok(false)}})}function speakBrowser(text){return new Promise(function(ok){if(!window.speechSynthesis){ok(false);return}var u=new SpeechSynthesisUtterance(text||"");u.lang=(c.lang||"fr")==="fr"?"fr-FR":"en-US";u.rate=1.08;u.pitch=1.0;u.onend=function(){ok(true)};u.onerror=function(){ok(false)};window.speechSynthesis.speak(u)})}async function speak(text){var r=await fetchTTS(text);if(r&&r.mode==="ai_audio"&&r.audio_b64){var a=await playBase64(r.mime||"audio/mpeg",r.audio_b64);if(a)return true}return await speakBrowser(text)}function setupRec(){var SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR)return null;var rr=new SR();rr.lang=(c.lang||"fr")==="fr"?"fr-FR":"en-US";rr.interimResults=false;rr.continuous=false;rr.maxAlternatives=1;rr.onstart=function(){listening=true;micBtn.textContent="⏹";status("Écoute en cours",true)};rr.onresult=function(ev){var h=(((ev||{}).results||[])[0]||[])[0];var txt=h&&h.transcript?String(h.transcript).trim():"";if(!txt)return;i.value=txt;f.dispatchEvent(new Event("submit",{cancelable:true}))};rr.onerror=function(){listening=false;if(!keepListening){micBtn.textContent="🎙"}};rr.onend=function(){listening=false;if(keepListening&&voiceMode){setTimeout(function(){try{rr.start()}catch(e){}},260)}else{micBtn.textContent="🎙";status("Prêt",false)}};return rr}async function ask(msg){var res=await fetch(c.endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({owner_id:c.owner_id,token:c.token,message:msg,last_contact_ref:lastRef})});return await res.json()}modeBtn.onclick=function(){voiceMode=!voiceMode;modeBtn.textContent=voiceMode?"Mode: Vocal":"Mode: Écrit";micBtn.classList.toggle("azsa-hidden",!voiceMode);if(!voiceMode){keepListening=false;if(rec&&listening){try{rec.stop()}catch(e){}}}};micBtn.onclick=function(){if(!voiceMode||!rec)return;if(keepListening){keepListening=false;micBtn.textContent="🎙";if(listening){try{rec.stop()}catch(e){}}status("Micro arrêté",false);return}keepListening=true;stopAudio();try{rec.start()}catch(e){}};row("bot","Bonjour, je suis votre assistant CRM IA. Je peux lister les dernières actions, ouvrir une fiche contact, donner un numéro et enregistrer des notes.");setCh(["Dernières actions","Fiche du dernier contact","Numéro du dernier contact","Note pour ce contact: à rappeler demain"]);rec=setupRec();f.addEventListener("submit",async function(e){e.preventDefault();var q=(i.value||"").trim();if(!q)return;row("user",q);i.value="";status("Analyse...",true);try{var d=await ask(q);var rep=(d&&d.reply)?d.reply:"Je n ai pas pu traiter la demande.";row("bot",rep);if(d&&d.last_contact_ref){lastRef=d.last_contact_ref}if(d&&Array.isArray(d.suggestions)){setCh(d.suggestions.slice(0,4))}if(voiceMode){await speak(rep)}status("Prêt",false)}catch(err){row("bot","Erreur technique temporaire.");status("Erreur",false)}})})();</script>'
-            . '</body></html>';
+        $html = <<<'HTML'
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Assistant CRM IA</title>
+<style>
+body{margin:0;background:#f1f6fb;font-family:Raleway,Segoe UI,Arial,sans-serif;color:#123d64}
+.ma-ai-stage{padding:8px 14px 12px}
+.ma-ai-stage__inner{max-width:1120px;margin:0 auto}
+.ma-ai-layout{width:100%;display:grid;grid-template-columns:minmax(320px,1fr) minmax(360px,1fr);gap:20px;align-items:stretch}
+.ma-ai-left{position:relative;min-height:520px;height:520px;max-height:520px;overflow:visible;background:transparent}
+.ma-ai-particles{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:.9;z-index:4}
+.ma-ai-character{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:2}
+.ma-ai-chat{position:relative;min-height:520px;height:520px;max-height:520px;border:1px solid rgba(18,61,100,.16);border-radius:18px;background:rgba(255,255,255,.84);box-shadow:0 12px 36px rgba(18,61,100,.10);padding:14px;display:flex;flex-direction:column;gap:10px}
+.ma-ai-chat-head{margin:0 0 2px}
+.ma-ai-chat-title{margin:0;color:#123d64;font-size:17px;font-weight:700}
+.ma-ai-chat-help{margin:4px 0 0;color:rgba(18,61,100,.82);font-size:12px;line-height:1.4}
+.ma-ai-thread{width:100%;flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:10px;padding:8px 2px 2px 0}
+.ma-ai-msg{display:flex;width:100%}
+.ma-ai-msg-assistant{justify-content:flex-start}
+.ma-ai-msg-user{justify-content:flex-end}
+.ma-ai-bubble{max-width:88%;padding:10px 12px;border-radius:14px;line-height:1.45;font-size:14px;white-space:pre-wrap;word-wrap:break-word}
+.ma-ai-msg-assistant .ma-ai-bubble{background:#eef6ff;color:#123d64;border:1px solid rgba(18,61,100,.14);border-bottom-left-radius:6px}
+.ma-ai-msg-user .ma-ai-bubble{background:#123d64;color:#fff;border:1px solid rgba(18,61,100,.24);border-bottom-right-radius:6px}
+.ma-ai-suggestions{display:flex;flex-wrap:wrap;gap:8px}
+.ma-ai-suggest-btn{border:1px solid rgba(18,61,100,.20);border-radius:999px;background:#f4f9ff;color:#123d64;font-size:12px;padding:7px 10px;cursor:pointer}
+.ma-ai-suggest-btn:hover{background:#e6f1ff}
+.ma-ai-status{font-size:12px;color:rgba(18,61,100,.78)}
+.ma-ai-status.is-thinking{font-weight:700;color:#1c6ea4}
+.ma-ai-input{display:flex;gap:8px;align-items:center}
+.ma-ai-input input{flex:1 1 auto;min-width:0;border:1px solid rgba(18,61,100,.24);border-radius:12px;padding:10px 12px;font-size:14px;color:#123d64;background:rgba(255,255,255,.95)}
+.ma-ai-input button{border:1px solid rgba(13,67,118,.25);border-radius:12px;padding:10px 12px;background:#123d64;color:#fff;font-weight:600;font-size:11px;white-space:nowrap;cursor:pointer}
+#ma-ai-mode-toggle{background:#eef6ff;color:#123d64;border-color:rgba(18,61,100,.18);font-size:12px}
+#ma-ai-mode-toggle:hover{background:#dfeeff}
+#ma-ai-mic-toggle{min-width:46px}
+.ma-ai-hidden{display:none!important}
+@media (max-width:920px){.ma-ai-layout{grid-template-columns:1fr}.ma-ai-left{min-height:260px;height:260px;max-height:260px}.ma-ai-chat{min-height:62dvh;height:62dvh;max-height:62dvh}}
+</style>
+</head>
+<body>
+<div class="ma-ai-stage">
+  <div class="ma-ai-stage__inner">
+    <div class="ma-ai-layout">
+      <div class="ma-ai-left">
+        <img class="ma-ai-character" id="ma-ai-character" alt="Assistant visuel" />
+        <canvas id="ma-ai-particles" class="ma-ai-particles" aria-hidden="true"></canvas>
+      </div>
+      <div class="ma-ai-chat">
+        <div class="ma-ai-chat-head">
+          <h2 class="ma-ai-chat-title">Assistant CRM IA</h2>
+          <p class="ma-ai-chat-help" id="ma-ai-chat-help"></p>
+        </div>
+        <div id="ma-ai-thread" class="ma-ai-thread" aria-live="polite"></div>
+        <div id="ma-ai-suggestions" class="ma-ai-suggestions"></div>
+        <div id="ma-ai-status" class="ma-ai-status">Prêt</div>
+        <form id="ma-ai-text-form" class="ma-ai-input">
+          <button type="button" id="ma-ai-mode-toggle">Mode: Écrit</button>
+          <button type="button" id="ma-ai-mic-toggle" class="ma-ai-hidden" aria-label="Activer le micro">🎙</button>
+          <input id="ma-ai-text-input" type="text" placeholder="Ex: donne la fiche du contact Sébastien" />
+          <button type="submit">Envoyer</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<script>window.AZSA_ADMIN=__CFG_JSON__;</script>
+<script>
+(function(){
+var c=window.AZSA_ADMIN||{};
+var thread=document.getElementById('ma-ai-thread');
+var form=document.getElementById('ma-ai-text-form');
+var input=document.getElementById('ma-ai-text-input');
+var statusNode=document.getElementById('ma-ai-status');
+var suggestions=document.getElementById('ma-ai-suggestions');
+var modeBtn=document.getElementById('ma-ai-mode-toggle');
+var micBtn=document.getElementById('ma-ai-mic-toggle');
+var chatHelp=document.getElementById('ma-ai-chat-help');
+var character=document.getElementById('ma-ai-character');
+var canvas=document.getElementById('ma-ai-particles');
+if(!thread||!form||!input||!statusNode||!suggestions||!modeBtn||!micBtn||!character||!canvas){return;}
+
+chatHelp.textContent='Connecté à '+(c.site_name||'votre site')+'. Demandez une fiche contact, les dernières actions, un numéro ou ajoutez des notes.';
+var gifBase=(c.gif_base_url||'').replace(/\/?$/,'/');
+if(!gifBase){gifBase='https://monassistant.mapage-wp.online/wp-content/uploads/2026/03/';}
+var characterGifs={
+  welcome:gifBase+'2-welcome.gif',
+  speaking:gifBase+'19-parler.gif',
+  waiting:gifBase+'7-reflechit.gif',
+  question:gifBase+'3-Lit-et-se-questionne.gif',
+  success:gifBase+'4-obtient-5-etoile.gif',
+  listening:gifBase+'9-regarde-avec-une-loupe.gif',
+  idle:gifBase+'15-est-tranquile.gif',
+  error:gifBase+'21-error.gif'
+};
+var defaultGif=(c.character_gif_url||'').trim()||characterGifs.idle;
+character.src=defaultGif;
+character.onerror=function(){if(character.src!==defaultGif){character.src=defaultGif;}};
+
+var lastRef='',voiceMode=false,recognizer=null,listening=false,keepListening=false,currentAudio=null,processing=false;
+function setMood(m){if(characterGifs[m]){character.src=characterGifs[m];}}
+function setStatus(text,thinking){statusNode.textContent=text||'';statusNode.classList.toggle('is-thinking',!!thinking);}
+function pushMessage(role,text){
+  var row=document.createElement('div');
+  row.className='ma-ai-msg ma-ai-msg-'+(role==='user'?'user':'assistant');
+  var bubble=document.createElement('div');
+  bubble.className='ma-ai-bubble';
+  bubble.textContent=(text||'').toString();
+  row.appendChild(bubble);
+  thread.appendChild(row);
+  thread.scrollTop=thread.scrollHeight;
+}
+function setSuggestions(items){
+  suggestions.innerHTML='';
+  (items||[]).forEach(function(label){
+    var btn=document.createElement('button');
+    btn.type='button';
+    btn.className='ma-ai-suggest-btn';
+    btn.textContent=String(label||'').trim();
+    btn.addEventListener('click',function(){
+      input.value=btn.textContent;
+      form.dispatchEvent(new Event('submit',{cancelable:true}));
+    });
+    suggestions.appendChild(btn);
+  });
+}
+function stopAudio(){
+  if(currentAudio){try{currentAudio.pause();}catch(e){}currentAudio.src='';currentAudio=null;}
+  if(window.speechSynthesis){try{window.speechSynthesis.cancel();}catch(e){}}
+}
+async function fetchTTS(text){
+  if(!c.tts_url){return{mode:'browser_tts'};}
+  try{
+    var res=await fetch(c.tts_url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text})});
+    return await res.json();
+  }catch(e){return{mode:'browser_tts'};}
+}
+function playBase64(mime,b64){
+  return new Promise(function(resolve){
+    stopAudio();
+    try{
+      var audio=new Audio('data:'+(mime||'audio/mpeg')+';base64,'+b64);
+      currentAudio=audio;
+      audio.onended=function(){setMood('idle');resolve(true);};
+      audio.onerror=function(){setMood('error');resolve(false);};
+      setMood('speaking');
+      var p=audio.play();
+      if(p&&p.catch){p.catch(function(){resolve(false);});}
+    }catch(e){resolve(false);}
+  });
+}
+function speakBrowser(text){
+  return new Promise(function(resolve){
+    if(!window.speechSynthesis){resolve(false);return;}
+    var u=new SpeechSynthesisUtterance(text||'');
+    u.lang=(c.lang||'fr')==='fr'?'fr-FR':'en-US';
+    u.rate=1.06;
+    u.pitch=1.0;
+    u.onstart=function(){setMood('speaking');};
+    u.onend=function(){setMood('idle');resolve(true);};
+    u.onerror=function(){setMood('error');resolve(false);};
+    window.speechSynthesis.speak(u);
+  });
+}
+async function speak(text){
+  var r=await fetchTTS(text);
+  if(r&&r.mode==='ai_audio'&&r.audio_b64){
+    var ok=await playBase64(r.mime||'audio/mpeg',r.audio_b64);
+    if(ok){return true;}
+  }
+  return await speakBrowser(text);
+}
+function setupRecognizer(){
+  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){return null;}
+  var rr=new SR();
+  rr.lang=(c.lang||'fr')==='fr'?'fr-FR':'en-US';
+  rr.interimResults=false;
+  rr.continuous=false;
+  rr.maxAlternatives=1;
+  rr.onstart=function(){listening=true;setMood('listening');micBtn.textContent='⏹';setStatus('Écoute en cours',true);};
+  rr.onresult=function(ev){
+    var hit=(((ev||{}).results||[])[0]||[])[0];
+    var txt=hit&&hit.transcript?String(hit.transcript).trim():'';
+    if(!txt){return;}
+    input.value=txt;
+    form.dispatchEvent(new Event('submit',{cancelable:true}));
+  };
+  rr.onend=function(){
+    listening=false;
+    if(keepListening&&voiceMode&&!processing){
+      setTimeout(function(){try{rr.start();}catch(e){}},280);
+    }else{
+      micBtn.textContent='🎙';
+      setMood('idle');
+      setStatus('Prêt',false);
+    }
+  };
+  rr.onerror=function(){setMood('error');listening=false;micBtn.textContent='🎙';};
+  return rr;
+}
+async function ask(msg){
+  var res=await fetch(c.endpoint,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({owner_id:c.owner_id,token:c.token,message:msg,last_contact_ref:lastRef})
+  });
+  return await res.json();
+}
+modeBtn.addEventListener('click',async function(){
+  voiceMode=!voiceMode;
+  modeBtn.textContent=voiceMode?'Mode: Vocal':'Mode: Écrit';
+  micBtn.classList.toggle('ma-ai-hidden',!voiceMode);
+  if(!voiceMode){
+    keepListening=false;
+    if(recognizer&&listening){try{recognizer.stop();}catch(e){}}
+    stopAudio();
+    setStatus('Mode écrit actif',false);
+    setMood('idle');
+    return;
+  }
+  var msg='Mode vocal activé. Je vous écoute.';
+  if(thread.children.length>1){msg='Je réactive le mode vocal. Dites-moi comment je peux vous aider.';}
+  pushMessage('assistant',msg);
+  await speak(msg);
+});
+micBtn.addEventListener('click',function(){
+  if(!voiceMode||!recognizer){return;}
+  if(keepListening){
+    keepListening=false;
+    if(listening){try{recognizer.stop();}catch(e){}}
+    micBtn.textContent='🎙';
+    setMood('idle');
+    setStatus('Micro arrêté',false);
+    return;
+  }
+  keepListening=true;
+  stopAudio();
+  try{recognizer.start();}catch(e){}
+});
+form.addEventListener('submit',async function(e){
+  e.preventDefault();
+  var q=(input.value||'').trim();
+  if(!q||processing){return;}
+  processing=true;
+  pushMessage('user',q);
+  input.value='';
+  setMood('waiting');
+  setStatus('Analyse...',true);
+  try{
+    var d=await ask(q);
+    var rep=(d&&d.reply)?d.reply:'Je n ai pas pu traiter la demande.';
+    pushMessage('assistant',rep);
+    if(d&&d.last_contact_ref){lastRef=d.last_contact_ref;}
+    if(d&&Array.isArray(d.suggestions)){setSuggestions(d.suggestions.slice(0,4));}
+    if(voiceMode){await speak(rep);}
+    setMood('idle');
+    setStatus('Prêt',false);
+  }catch(err){
+    pushMessage('assistant','Erreur technique temporaire.');
+    setMood('error');
+    setStatus('Erreur',false);
+  }
+  processing=false;
+});
+
+function initParticles(){
+  var ctx=canvas.getContext('2d');
+  if(!ctx){return;}
+  var dots=[],w=0,h=0,count=44;
+  function resize(){
+    w=canvas.clientWidth||520;
+    h=canvas.clientHeight||520;
+    canvas.width=Math.floor(w*window.devicePixelRatio);
+    canvas.height=Math.floor(h*window.devicePixelRatio);
+    ctx.setTransform(window.devicePixelRatio,0,0,window.devicePixelRatio,0,0);
+    dots=[];
+    for(var k=0;k<count;k++){
+      dots.push({x:Math.random()*w,y:Math.random()*h,r:Math.random()*1.9+0.5,vx:(Math.random()-0.5)*0.34,vy:(Math.random()-0.5)*0.34,a:Math.random()*0.6+0.15});
+    }
+  }
+  function tick(){
+    ctx.clearRect(0,0,w,h);
+    for(var n=0;n<dots.length;n++){
+      var p=dots[n];
+      p.x+=p.vx;p.y+=p.vy;
+      if(p.x<0||p.x>w){p.vx*=-1;}
+      if(p.y<0||p.y>h){p.vy*=-1;}
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,p.r,0,Math.PI*2,false);
+      ctx.fillStyle='rgba(18,61,100,'+p.a+')';
+      ctx.fill();
+    }
+    requestAnimationFrame(tick);
+  }
+  resize();
+  window.addEventListener('resize',resize);
+  tick();
+}
+
+recognizer=setupRecognizer();
+initParticles();
+pushMessage('assistant','Bonjour, je suis votre assistant CRM IA. Je peux lister les dernières actions, ouvrir une fiche contact, donner un numéro et enregistrer des notes.');
+setSuggestions(['Dernières actions','Fiche du dernier contact','Numéro du dernier contact','Note pour ce contact: à rappeler demain']);
+setStatus('Prêt',false);
+setMood('welcome');
+setTimeout(function(){setMood('idle');},1600);
+})();
+</script>
+</body>
+</html>
+HTML;
+        echo str_replace('__CFG_JSON__', $cfg_json, $html);
         exit;
     }
 
