@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.1.3
+ * Version: 3.1.4
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.1.3';
+    const VERSION = '3.1.4';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -1010,15 +1010,15 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             'lead_deleted' => 'Fiche supprimée',
             'phone_call_requested' => 'Demande d’appel',
             'contact_phone_updated' => 'Téléphone mis à jour',
-            'intent_add_note' => 'Intention: ajouter une note',
-            'intent_update_phone' => 'Intention: modifier téléphone',
-            'intent_send_email' => 'Intention: envoyer un email',
-            'intent_send_sms' => 'Intention: envoyer un SMS',
-            'intent_call_phone' => 'Intention: appeler',
-            'intent_receive_call' => 'Intention: appel entrant',
-            'intent_whatsapp' => 'Intention: WhatsApp',
-            'intent_book_rdv' => 'Intention: prise de RDV',
-            'intent_cancel_rdv' => 'Intention: annulation RDV',
+            'intent_add_note' => 'Note',
+            'intent_update_phone' => 'Téléphone',
+            'intent_send_email' => 'Email',
+            'intent_send_sms' => 'SMS',
+            'intent_call_phone' => 'Appel sortant',
+            'intent_receive_call' => 'Appel entrant',
+            'intent_whatsapp' => 'WhatsApp',
+            'intent_book_rdv' => 'RDV',
+            'intent_cancel_rdv' => 'RDV annulé',
             'email_sent' => 'Email envoyé',
             'sms_sent' => 'SMS envoyé',
             'call_outbound' => 'Appel sortant',
@@ -1031,15 +1031,68 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         return isset($map[$event_type]) ? $map[$event_type] : $event_type;
     }
 
+    public static function event_icon($event_type) {
+        $event_type = sanitize_key((string) $event_type);
+        if (in_array($event_type, array('admin_note_added', 'intent_add_note'), true)) {
+            return '📝';
+        }
+        if (in_array($event_type, array('intent_send_email', 'email_sent'), true)) {
+            return '✉️';
+        }
+        if (in_array($event_type, array('intent_send_sms', 'sms_sent'), true)) {
+            return '💬';
+        }
+        if (in_array($event_type, array('intent_whatsapp', 'whatsapp_sent', 'whatsapp_received'), true)) {
+            return '🟢';
+        }
+        if (in_array($event_type, array('intent_call_phone', 'call_outbound', 'phone_call_requested'), true)) {
+            return '📞';
+        }
+        if (in_array($event_type, array('intent_receive_call', 'call_inbound'), true)) {
+            return '📲';
+        }
+        if (in_array($event_type, array('intent_book_rdv', 'rdv_booked'), true)) {
+            return '📅';
+        }
+        if (in_array($event_type, array('intent_cancel_rdv', 'rdv_cancelled'), true)) {
+            return '❌';
+        }
+        if (in_array($event_type, array('contact_phone_updated', 'intent_update_phone'), true)) {
+            return '☎️';
+        }
+        return '📌';
+    }
+
+    public static function event_card_detail($event) {
+        $event_type = sanitize_key((string) ($event['event_type'] ?? ''));
+        $data = json_decode((string) ($event['data'] ?? '{}'), true);
+        if (!is_array($data)) {
+            $data = array();
+        }
+        if (in_array($event_type, array('admin_note_added', 'intent_add_note'), true)) {
+            $note = trim((string) ($data['note'] ?? ''));
+            if ($note !== '') {
+                return $note;
+            }
+        }
+        if (in_array($event_type, array('intent_send_email', 'intent_send_sms', 'intent_whatsapp', 'intent_call_phone', 'intent_receive_call', 'intent_book_rdv', 'intent_cancel_rdv'), true)) {
+            $msg = trim((string) ($data['message'] ?? ''));
+            if ($msg !== '') {
+                return self::smart_trim($msg, 260);
+            }
+        }
+        if ($event_type === 'contact_phone_updated') {
+            $phone = trim((string) ($data['phone'] ?? ''));
+            if ($phone !== '') {
+                return 'Nouveau numéro: ' . $phone;
+            }
+        }
+        return self::event_data_to_text($event);
+    }
+
     public static function detect_important_intent_event($message, $ai_action = '') {
         $m = self::normalize_search_text($message);
         $ai_action = sanitize_key((string) $ai_action);
-        if ($ai_action === 'add_note') {
-            return 'intent_add_note';
-        }
-        if ($ai_action === 'update_phone') {
-            return 'intent_update_phone';
-        }
         if (strpos($m, 'email') !== false || strpos($m, 'mail') !== false) {
             return 'intent_send_email';
         }
@@ -1061,7 +1114,76 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
         if (strpos($m, 'rdv') !== false || strpos($m, 'rendez vous') !== false || strpos($m, 'rendez-vous') !== false) {
             return 'intent_book_rdv';
         }
+        if ($ai_action === 'add_note') {
+            return 'intent_add_note';
+        }
+        if ($ai_action === 'update_phone') {
+            return 'intent_update_phone';
+        }
         return '';
+    }
+
+    public static function text_is_yes($text) {
+        $t = self::normalize_search_text($text);
+        return (bool) preg_match('/(^|\\s)(oui|ok|d accord|valide|envoyer|confirme|go)(\\s|$)/', $t);
+    }
+
+    public static function text_is_no($text) {
+        $t = self::normalize_search_text($text);
+        return (bool) preg_match('/(^|\\s)(non|annule|annuler|stop|laisse tomber|refuse)(\\s|$)/', $t);
+    }
+
+    public static function ai_polish_french_text($text, $settings) {
+        $text = trim((string) $text);
+        if ($text === '') {
+            return '';
+        }
+        $api_key = trim((string) ($settings['api_key'] ?? ''));
+        if ($api_key === '' && defined('ANTHROPIC_API_KEY')) {
+            $api_key = (string) ANTHROPIC_API_KEY;
+        }
+        if ($api_key === '') {
+            return $text;
+        }
+        $payload = array(
+            'model' => $settings['model'] ?: 'claude-sonnet-4-20250514',
+            'max_tokens' => 300,
+            'temperature' => 0.1,
+            'system' => "Corrige uniquement l'orthographe, la grammaire et la ponctuation du texte en français. "
+                . "Garde le sens, le ton, et ne rajoute pas d'informations. Retourne uniquement le texte final.",
+            'messages' => array(
+                array(
+                    'role' => 'user',
+                    'content' => array(
+                        array('type' => 'text', 'text' => $text),
+                    ),
+                ),
+            ),
+        );
+        $res = wp_remote_post('https://api.anthropic.com/v1/messages', array(
+            'timeout' => 20,
+            'headers' => array(
+                'x-api-key' => $api_key,
+                'anthropic-version' => '2023-06-01',
+                'content-type' => 'application/json',
+            ),
+            'body' => wp_json_encode($payload),
+        ));
+        if (is_wp_error($res) || (int) wp_remote_retrieve_response_code($res) >= 300) {
+            return $text;
+        }
+        $body = json_decode((string) wp_remote_retrieve_body($res), true);
+        if (!is_array($body) || empty($body['content'])) {
+            return $text;
+        }
+        $out = '';
+        foreach ((array) $body['content'] as $c) {
+            if (($c['type'] ?? '') === 'text') {
+                $out .= (string) ($c['text'] ?? '');
+            }
+        }
+        $out = trim((string) $out);
+        return $out !== '' ? $out : $text;
     }
 
     public static function get_contact_timeline($owner_user_id, $lead) {
@@ -1314,10 +1436,11 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             $when = $when_ts ? gmdate('d/m/y H:i', $when_ts) : self::format_date_short((string) ($ev['created_at'] ?? ''));
             $label = self::format_event_label((string) ($ev['event_type'] ?? ''));
             $actor = (string) ($ev['actor'] ?? '');
-            $data_text = self::event_data_to_text($ev);
+            $data_text = self::event_card_detail($ev);
+            $icon = self::event_icon((string) ($ev['event_type'] ?? ''));
             echo '<article style="background:#fff;border:1px solid #dcdcde;border-radius:12px;padding:12px 14px;box-shadow:0 1px 2px rgba(0,0,0,.03);">';
             echo '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 8px;">';
-            echo '<div style="font-weight:700;color:#123d64;">' . esc_html($label) . '</div>';
+            echo '<div style="font-weight:700;color:#123d64;font-size:15px;">' . esc_html($icon . ' ' . $label) . '</div>';
             echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
             echo '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#eef6ff;color:#123d64;font-size:12px;">' . esc_html($when) . '</span>';
             if ($actor !== '') {
@@ -1897,9 +2020,44 @@ character.src=defaultGif;
 character.onerror=function(){if(character.src!==defaultGif){character.src=defaultGif;}};
 
 var lastRef='',chatSessionId='',voiceMode=false,recognizer=null,listening=false,keepListening=false,currentAudio=null,processing=false;
+var storageKey='azsa_admin_chat_state_v2_'+String(c.owner_id||'0');
+var chatMessages=[];
+var suggestionItems=[];
 function setMood(m){if(characterGifs[m]){character.src=characterGifs[m];}}
 function setStatus(text,thinking){statusNode.textContent=text||'';statusNode.classList.toggle('is-thinking',!!thinking);}
-function pushMessage(role,text){
+function saveState(){
+  try{
+    localStorage.setItem(storageKey,JSON.stringify({
+      v:2,
+      messages:chatMessages.slice(-180),
+      last_ref:lastRef||'',
+      session_id:chatSessionId||'',
+      voice_mode:!!voiceMode,
+      suggestions:suggestionItems.slice(0,6),
+      updated_at:Date.now()
+    }));
+  }catch(e){}
+}
+function restoreState(){
+  try{
+    var raw=localStorage.getItem(storageKey);
+    if(!raw){return false;}
+    var st=JSON.parse(raw);
+    if(!st||!Array.isArray(st.messages)||!st.messages.length){return false;}
+    chatMessages=st.messages.slice(-180);
+    lastRef=String(st.last_ref||'');
+    chatSessionId=String(st.session_id||'');
+    voiceMode=!!st.voice_mode;
+    suggestionItems=Array.isArray(st.suggestions)?st.suggestions.slice(0,6):[];
+    thread.innerHTML='';
+    chatMessages.forEach(function(m){
+      pushMessage(m.role||'assistant',m.text||'',true);
+    });
+    if(suggestionItems.length){setSuggestions(suggestionItems);}
+    return true;
+  }catch(e){return false;}
+}
+function pushMessage(role,text,skipStore){
   var row=document.createElement('div');
   row.className='ma-ai-msg ma-ai-msg-'+(role==='user'?'user':'assistant');
   var bubble=document.createElement('div');
@@ -1908,10 +2066,16 @@ function pushMessage(role,text){
   row.appendChild(bubble);
   thread.appendChild(row);
   thread.scrollTop=thread.scrollHeight;
+  if(!skipStore){
+    chatMessages.push({role:(role==='user'?'user':'assistant'),text:(text||'').toString()});
+    if(chatMessages.length>180){chatMessages=chatMessages.slice(-180);}
+    saveState();
+  }
 }
 function setSuggestions(items){
+  suggestionItems=(items||[]).map(function(x){return String(x||'').trim();}).filter(Boolean).slice(0,6);
   suggestions.innerHTML='';
-  (items||[]).forEach(function(label){
+  suggestionItems.forEach(function(label){
     var btn=document.createElement('button');
     btn.type='button';
     btn.className='ma-ai-suggest-btn';
@@ -1922,6 +2086,7 @@ function setSuggestions(items){
     });
     suggestions.appendChild(btn);
   });
+  saveState();
 }
 function stopAudio(){
   if(currentAudio){try{currentAudio.pause();}catch(e){}currentAudio.src='';currentAudio=null;}
@@ -2029,6 +2194,7 @@ modeBtn.addEventListener('click',async function(){
     stopAudio();
     setStatus('Mode écrit actif',false);
     setMood('idle');
+    saveState();
     return;
   }
   keepListening=true;
@@ -2036,6 +2202,7 @@ modeBtn.addEventListener('click',async function(){
   var msg='Mode vocal activé. Je vous écoute.';
   if(thread.children.length>1){msg='Je réactive le mode vocal. Dites-moi comment je peux vous aider.';}
   pushMessage('assistant',msg);
+  saveState();
   await speak(msg);
 });
 micBtn.addEventListener('click',function(){
@@ -2068,6 +2235,7 @@ form.addEventListener('submit',async function(e){
     if(d&&d.last_contact_ref){lastRef=d.last_contact_ref;}
     if(d&&d.session_id){chatSessionId=String(d.session_id);}
     if(d&&Array.isArray(d.suggestions)){setSuggestions(d.suggestions.slice(0,4));}
+    saveState();
     if(voiceMode){await speak(rep);}
     setMood('idle');
     setStatus('Prêt',false);
@@ -2118,8 +2286,15 @@ function initParticles(){
 
 recognizer=setupRecognizer();
 initParticles();
-pushMessage('assistant','Bonjour, je suis votre assistant CRM IA. Je peux lister les dernières actions, ouvrir une fiche contact, donner un numéro et enregistrer des notes.');
-setSuggestions(['Dernières actions','Fiche du dernier contact','Numéro du dernier contact','Note pour ce contact: à rappeler demain']);
+var restored=restoreState();
+if(!restored){
+  pushMessage('assistant','Bonjour, je suis votre assistant CRM IA. Je peux lister les dernières actions, ouvrir une fiche contact, donner un numéro et enregistrer des notes.');
+  setSuggestions(['Dernières actions','Fiche du dernier contact','Numéro du dernier contact','Note pour ce contact: à rappeler demain']);
+}else{
+  pushMessage('assistant','Salut, de retour. On reprend la conversation.',true);
+}
+modeBtn.textContent=voiceMode?'Mode: Vocal':'Mode: Écrit';
+micBtn.classList.toggle('ma-ai-hidden',!voiceMode);
 setStatus('Prêt',false);
 setMood('welcome');
 setTimeout(function(){setMood('idle');},1600);
@@ -2472,6 +2647,52 @@ HTML;
         );
     }
 
+    public static function build_admin_chat_suggestions($message, $reply, $has_current_contact = false) {
+        $m = self::normalize_search_text($message);
+        $r = self::normalize_search_text($reply);
+        $s = trim($m . ' ' . $r);
+        $out = array();
+
+        if ($has_current_contact) {
+            $out[] = 'Voir la fiche en cours';
+            $out[] = 'Ajouter une note';
+        }
+        if (strpos($s, 'fiche') !== false || strpos($s, 'contact') !== false) {
+            $out[] = 'Modifier le téléphone';
+            $out[] = 'Envoyer un email';
+            $out[] = 'Envoyer un SMS';
+            $out[] = 'Prendre un RDV';
+        }
+        if (strpos($s, 'note') !== false) {
+            $out[] = 'Ajouter une autre note';
+        }
+        if (strpos($s, 'telephone') !== false || strpos($s, 'tel') !== false || strpos($s, 'appel') !== false) {
+            $out[] = 'Appeler ce contact';
+            $out[] = 'Noter le compte rendu';
+        }
+        if (strpos($s, 'email') !== false || strpos($s, 'mail') !== false) {
+            $out[] = 'Rédiger un email';
+            $out[] = 'Confirmer et envoyer';
+        }
+        if (strpos($s, 'sms') !== false || strpos($s, 'whatsapp') !== false) {
+            $out[] = 'Ouvrir SMS';
+            $out[] = 'Ajouter le contenu envoyé';
+        }
+        if (strpos($s, 'rdv') !== false || strpos($s, 'rendez') !== false) {
+            $out[] = 'Confirmer le RDV';
+            $out[] = 'Annuler le RDV';
+        }
+        if (strpos($s, 'action') !== false || strpos($s, 'historique') !== false || strpos($s, 'event') !== false || strpos($s, 'even') !== false) {
+            $out[] = 'Dernières actions';
+            $out[] = 'Derniers événements';
+        }
+
+        if (empty($out)) {
+            $out = array('Fiche du dernier contact', 'Dernières actions', 'Ajouter une note');
+        }
+        return array_values(array_slice(array_unique($out), 0, 6));
+    }
+
     public static function rest_admin_assistant_chat(WP_REST_Request $request) {
         $owner_user_id = self::normalize_owner_user_id((int) $request->get_param('owner_id'));
         $token = sanitize_text_field((string) $request->get_param('token'));
@@ -2724,6 +2945,11 @@ HTML;
             $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
             $reply = "Vue CRM rapide: " . $count . " contacts au total, dont " . $rdv . " avec RDV. "
                 . "Vous pouvez me demander: dernières actions, fiche d’un contact, numéro d’un contact, ou enregistrer une note.";
+        }
+
+        $dynamic_suggestions = self::build_admin_chat_suggestions($message, $reply, $out_ref !== '');
+        if (!empty($dynamic_suggestions)) {
+            $suggestions = $dynamic_suggestions;
         }
 
         self::log_event($owner_user_id, 'assistant', 'admin_chat_assistant_reply', array(
