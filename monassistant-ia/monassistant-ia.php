@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 3.6.3
+ * Version: 3.6.4
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '3.6.3';
+    const VERSION = '3.6.4';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -3133,12 +3133,16 @@ HTML;
             return array();
         }
 
+        $global_rules_block = self::get_global_rules_prompt_block($settings);
         $system = "Tu es un routeur d'intentions CRM. Retourne STRICTEMENT un JSON valide: "
             . "{\"action\":\"...\",\"target\":\"...\",\"note\":\"...\",\"phone\":\"...\"}. "
             . "Actions autorisées: get_contact, add_note, update_phone, list_actions, list_events, summary, unknown. "
             . "Règles: si l'utilisateur dit \"cette fiche\" ou équivalent, target=\"__CURRENT__\". "
             . "Si demande de modification du téléphone sans numéro, action=update_phone et phone=\"\". "
             . "Ne jamais inventer de valeur.";
+        if ($global_rules_block !== '') {
+            $system .= "\n\n" . $global_rules_block;
+        }
 
         $payload = array(
             'model' => $settings['model'] ?: 'claude-sonnet-4-20250514',
@@ -3195,6 +3199,75 @@ HTML;
             'note' => trim((string) ($data['note'] ?? '')),
             'phone' => trim((string) ($data['phone'] ?? '')),
         );
+    }
+
+    public static function admin_llm_reply($message, $last_contact_ref, $leads, $settings) {
+        $api_key = trim((string) ($settings['api_key'] ?? ''));
+        if ($api_key === '' && defined('ANTHROPIC_API_KEY')) {
+            $api_key = (string) ANTHROPIC_API_KEY;
+        }
+        if ($api_key === '') {
+            return '';
+        }
+
+        $ctx = array();
+        foreach (array_slice((array) $leads, 0, 14) as $lead) {
+            $name = trim((string) ($lead['first_name'] ?? '') . ' ' . (string) ($lead['last_name'] ?? ''));
+            $ctx[] = '- ' . (string) ($lead['ref'] ?? 'N/A')
+                . ' | ' . ($name !== '' ? $name : 'N/A')
+                . ' | ' . ((string) ($lead['email'] ?? '') !== '' ? (string) $lead['email'] : 'N/A')
+                . ' | ' . ((string) ($lead['phone'] ?? '') !== '' ? (string) $lead['phone'] : 'N/A');
+        }
+        $global_rules_block = self::get_global_rules_prompt_block($settings);
+        $system = "Tu es l'assistant CRM IA de l'administrateur. Réponds en français, clair, court et actionnable. "
+            . "N'invente rien. Si une fiche est ambiguë, demande explicitement la référence LEAD-.... "
+            . "Si la demande n'est pas liée aux contacts/actions CRM, recentre vers ce périmètre.";
+        if ($global_rules_block !== '') {
+            $system .= "\n\n" . $global_rules_block;
+        }
+        $payload = array(
+            'model' => $settings['model'] ?: 'claude-sonnet-4-20250514',
+            'max_tokens' => 220,
+            'temperature' => 0.2,
+            'system' => $system,
+            'messages' => array(
+                array(
+                    'role' => 'user',
+                    'content' => array(
+                        array(
+                            'type' => 'text',
+                            'text' => "Message admin: " . wp_strip_all_tags((string) $message)
+                                . "\nDernière fiche active: " . (string) $last_contact_ref
+                                . "\nContacts récents:\n" . implode("\n", $ctx),
+                        ),
+                    ),
+                ),
+            ),
+        );
+        $res = wp_remote_post('https://api.anthropic.com/v1/messages', array(
+            'timeout' => 20,
+            'headers' => array(
+                'x-api-key' => $api_key,
+                'anthropic-version' => '2023-06-01',
+                'content-type' => 'application/json',
+            ),
+            'body' => wp_json_encode($payload),
+        ));
+        if (is_wp_error($res) || (int) wp_remote_retrieve_response_code($res) >= 300) {
+            return '';
+        }
+        $body = json_decode((string) wp_remote_retrieve_body($res), true);
+        if (!is_array($body) || empty($body['content']) || !is_array($body['content'])) {
+            return '';
+        }
+        $txt = '';
+        foreach ($body['content'] as $c) {
+            if (($c['type'] ?? '') === 'text') {
+                $txt .= (string) ($c['text'] ?? '');
+            }
+        }
+        $txt = trim(wp_strip_all_tags((string) $txt));
+        return self::smart_trim($txt, 500);
     }
 
     public static function build_admin_chat_suggestions($message, $reply, $has_current_contact = false) {
@@ -4006,10 +4079,15 @@ HTML;
                 }
             }
         } elseif ($reply === '') {
-            $count = count($leads);
-            $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
-            $reply = "Vue CRM rapide: " . $count . " contacts au total, dont " . $rdv . " avec RDV. "
-                . "Vous pouvez me demander: dernières actions, fiche d’un contact, numéro d’un contact, ou enregistrer une note.";
+            $llm_fallback = self::admin_llm_reply($message, $last_contact_ref, $leads, $settings);
+            if ($llm_fallback !== '') {
+                $reply = $llm_fallback;
+            } else {
+                $count = count($leads);
+                $rdv = count(array_filter($leads, function ($l) { return !empty($l['wants_rdv']); }));
+                $reply = "Vue CRM rapide: " . $count . " contacts au total, dont " . $rdv . " avec RDV. "
+                    . "Vous pouvez me demander: dernières actions, fiche d’un contact, numéro d’un contact, ou enregistrer une note.";
+            }
         }
 
         $dynamic_suggestions = self::build_admin_chat_suggestions($message, $reply, $out_ref !== '');
