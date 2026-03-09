@@ -86,6 +86,8 @@
     var bookingPollTimer = null;
     var bookingSessionId = '';
     var userQuestionCount = 0;
+    var chatMessages = [];
+    var STORAGE_KEY = 'azsa_chat_state_v2';
     var transcript = [];
     var lead = {
       askedAfterFirstReply: false,
@@ -108,20 +110,79 @@
 
     function setMood() {}
 
-    function push(role, text) {
+    function sanitizeSources(items) {
+      var out = [];
+      (items || []).forEach(function (item) {
+        if (!item || typeof item !== 'object') return;
+        var label = (item.label || item.title || '').toString().trim();
+        var url = (item.url || '').toString().trim();
+        if (!label || !url) return;
+        if (!/^https?:\/\//i.test(url)) return;
+        out.push({ label: label, url: url });
+      });
+      return out.slice(0, 3);
+    }
+
+    function saveState() {
+      try {
+        var payload = {
+          v: 2,
+          messages: chatMessages.slice(-80),
+          transcript: transcript.slice(-80),
+          lead: lead,
+          userQuestionCount: userQuestionCount
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      } catch (e) {}
+    }
+
+    function appendMessage(role, text, meta) {
       var row = createEl('div', { class: 'azsa-row ' + (role === 'user' ? 'azsa-row-user' : 'azsa-row-bot') });
       var bubble = createEl('div', { class: 'azsa-bubble' });
       bubble.textContent = text || '';
+      if (role === 'bot') {
+        var sources = sanitizeSources((meta && meta.sources) || []);
+        if (sources.length) {
+          var links = createEl('div', { class: 'azsa-links' });
+          sources.forEach(function (src) {
+            var a = createEl('a', { class: 'azsa-link', href: src.url, target: '_self', rel: 'noopener' });
+            a.textContent = src.label;
+            links.appendChild(a);
+          });
+          bubble.appendChild(links);
+        }
+      }
       row.appendChild(bubble);
       thread.appendChild(row);
       thread.scrollTop = thread.scrollHeight;
+    }
+
+    function push(role, text, meta) {
+      appendMessage(role, text, meta);
       transcript.push((role === 'user' ? 'Visiteur' : 'Assistant') + ': ' + (text || ''));
       if (transcript.length > 40) transcript = transcript.slice(transcript.length - 40);
+      chatMessages.push({
+        role: role === 'user' ? 'user' : 'bot',
+        text: (text || '').toString(),
+        sources: sanitizeSources((meta && meta.sources) || [])
+      });
+      if (chatMessages.length > 80) chatMessages = chatMessages.slice(chatMessages.length - 80);
+      saveState();
     }
 
     function renderChips(items) {
       chips.innerHTML = '';
-      (items || []).forEach(function (label) {
+      (items || []).forEach(function (entry) {
+        var label = '';
+        var url = '';
+        if (entry && typeof entry === 'object') {
+          label = (entry.label || entry.title || '').toString();
+          url = (entry.url || '').toString();
+        } else {
+          label = (entry || '').toString();
+        }
+        label = label.trim();
+        if (!label) return;
         var chip = createEl('button', { class: 'azsa-chip', type: 'button' });
         chip.textContent = label;
         var low = (label || '').toString().toLowerCase();
@@ -129,6 +190,10 @@
           chip.classList.add('azsa-chip-rdv');
         }
         chip.addEventListener('click', function () {
+          if (url && /^https?:\/\//i.test(url)) {
+            window.location.href = url;
+            return;
+          }
           input.value = label;
           form.dispatchEvent(new Event('submit', { cancelable: true }));
         });
@@ -273,8 +338,8 @@
         var map = { fr: 'fr-FR', en: 'en-US', es: 'es-ES', de: 'de-DE', it: 'it-IT', pt: 'pt-PT' };
         u.lang = map[(cfg.lang || 'fr')] || 'fr-FR';
         u.voice = selectedVoice;
-        u.rate = 1.0;
-        u.pitch = 0.92;
+        u.rate = 1.08;
+        u.pitch = 1.0;
         u.volume = 1.0;
         setMood('speaking');
         u.onend = function () { setMood('idle'); resolve(true); };
@@ -789,18 +854,27 @@
 
         var data = await ask(text);
         var reply = data.reply || 'Je n\'ai pas pu répondre pour le moment.';
-        push('bot', reply);
+        var sourceLinks = Array.isArray(data.sources) ? data.sources.slice(0, 3).map(function (s) {
+          var title = s && s.title ? String(s.title).trim() : '';
+          var url = s && s.url ? String(s.url).trim() : '';
+          if (!title || !/^https?:\/\//i.test(url)) return null;
+          return { label: 'Ouvrir: ' + title, url: url };
+        }).filter(Boolean) : [];
 
+        push('bot', reply, { sources: sourceLinks });
+
+        var chipItems = [];
         if (Array.isArray(data.suggestions) && data.suggestions.length) {
           var suggestions = data.suggestions.slice(0, 3).map(function (s) {
             return (s || '').toString().trim();
           }).filter(Boolean);
-          renderChips(suggestions);
-        } else if (Array.isArray(data.sources) && data.sources.length) {
-          var suggestions = data.sources.slice(0, 3).map(function (s) {
-            return s && s.title ? ('Voir: ' + s.title) : '';
-          }).filter(Boolean);
-          renderChips(suggestions);
+          chipItems = chipItems.concat(suggestions);
+        }
+        if (sourceLinks.length) {
+          chipItems = chipItems.concat(sourceLinks);
+        }
+        if (chipItems.length) {
+          renderChips(chipItems.slice(0, 4));
         }
 
         if (voiceMode) {
@@ -846,14 +920,38 @@
       };
     }
 
-    var welcome = cfg.welcome || 'Bonjour, je suis votre assistant.';
-    push('bot', welcome);
-    renderChips([
-      'Quels services propose ce site ?',
-      'RDV téléphonique',
-      'Comment vous contacter ?',
-      'Pouvez-vous résumer la proposition de valeur ?'
-    ]);
+    (function restoreState() {
+      var restored = false;
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          var state = JSON.parse(raw);
+          if (state && Array.isArray(state.messages) && state.messages.length) {
+            chatMessages = state.messages.slice(-80);
+            thread.innerHTML = '';
+            chatMessages.forEach(function (m) {
+              appendMessage(m.role === 'user' ? 'user' : 'bot', m.text || '', { sources: m.sources || [] });
+            });
+            transcript = Array.isArray(state.transcript) ? state.transcript.slice(-80) : [];
+            if (state.lead && typeof state.lead === 'object') {
+              lead = Object.assign({}, lead, state.lead);
+            }
+            userQuestionCount = Number(state.userQuestionCount || 0);
+            restored = true;
+          }
+        }
+      } catch (e) {}
+      if (!restored) {
+        var welcome = cfg.welcome || 'Bonjour, je suis votre assistant.';
+        push('bot', welcome);
+        renderChips([
+          'Quels services propose ce site ?',
+          'RDV téléphonique',
+          'Comment vous contacter ?',
+          'Pouvez-vous résumer la proposition de valeur ?'
+        ]);
+      }
+    })();
 
     if (!cfg.hasIndex) {
       setStatus('Index en cours de génération', true);

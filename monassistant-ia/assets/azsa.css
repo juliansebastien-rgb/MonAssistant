@@ -158,6 +158,26 @@
   border: 1px solid rgba(18,61,100,.14);
   border-bottom-left-radius: 6px;
 }
+.azsa-links {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.azsa-link {
+  display: inline-block;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0d4f80;
+  background: #ffffff;
+  border: 1px solid rgba(13,79,128,.24);
+  border-radius: 999px;
+  padding: 5px 9px;
+}
+.azsa-link:hover {
+  background: #f1f8ff;
+}
 
 .azsa-chips { display: flex; flex-wrap: wrap; gap: 7px; padding: 0 12px 8px; }
 .azsa-chip {

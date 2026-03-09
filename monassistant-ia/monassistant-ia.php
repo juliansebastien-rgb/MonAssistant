@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Chatbot Mon Assistant IA
  * Description: Assistant flottant pour répondre aux visiteurs à partir des contenus du site (crawl + index + chat).
- * Version: 2.9.0
+ * Version: 2.9.1
  * Author: Azertaf
  */
 
@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 }
 
 final class AZSA_Plugin {
-    const VERSION = '2.9.0';
+    const VERSION = '2.9.1';
     const OPTION_LEADS = 'azsa_leads';
     const OPTION_SETTINGS = 'azsa_settings';
     const OPTION_PUBLIC_OWNER = 'azsa_public_owner_user_id';
@@ -53,7 +53,7 @@ final class AZSA_Plugin {
             'lang' => 'fr',
             'elevenlabs_api_key' => '',
             'elevenlabs_voice_male' => 'HQFJsVV9DOZgHpgWP5ku',
-            'elevenlabs_speed' => '1.00',
+            'elevenlabs_speed' => '1.08',
             'calendar_provider' => 'none',
             'calendly_url' => '',
             'calendly_pat' => '',
@@ -1239,16 +1239,24 @@ document.querySelectorAll('.azsa-copy-btn').forEach(function(btn){
             $lang = 'fr';
         }
 
+        $speed = (float) ($settings['elevenlabs_speed'] ?? '1.08');
+        if ($speed < 1.05) {
+            $speed = 1.05;
+        }
+        if ($speed > 1.25) {
+            $speed = 1.25;
+        }
+
         $payload = array(
             'text' => wp_strip_all_tags($text),
             'model_id' => 'eleven_flash_v2_5',
             'language_code' => $lang,
             'voice_settings' => array(
-                'stability' => 0.26,
-                'similarity_boost' => 0.86,
-                'style' => 0.72,
+                'stability' => 0.20,
+                'similarity_boost' => 0.90,
+                'style' => 0.88,
                 'use_speaker_boost' => true,
-                'speed' => (float) ($settings['elevenlabs_speed'] ?? '1.00'),
+                'speed' => $speed,
             ),
         );
 
